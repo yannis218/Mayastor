@@ -11,7 +11,12 @@ use rpc::mayastor::{
     Nexus as RpcNexus,
     PublishNexusReply,
     PublishNexusRequest,
+    RebuildProgressRequest,
+    RebuildStateRequest,
     RemoveChildNexusRequest,
+    ShareProtocolNexus,
+    StartRebuildRequest,
+    StopRebuildRequest,
     UnpublishNexusRequest,
 };
 
@@ -80,6 +85,7 @@ pub(crate) fn register_rpc_methods() {
                         })
                         .collect::<Vec<_>>(),
                     device_path: nexus.get_share_path().unwrap_or_default(),
+                    rebuilds: nexus.rebuilds.len() as u64,
                 })
                 .collect::<Vec<_>>(),
         })
@@ -106,7 +112,7 @@ pub(crate) fn register_rpc_methods() {
         |args: DestroyNexusRequest| {
             let fut = async move {
                 let nexus = nexus_lookup(&args.uuid)?;
-                nexus.destroy().await;
+                nexus.destroy().await?;
                 Ok(())
             };
             fut.boxed_local()
@@ -130,9 +136,21 @@ pub(crate) fn register_rpc_methods() {
             let key: Option<String> =
                 if args.key == "" { None } else { Some(args.key) };
 
+            let share_protocol = match ShareProtocolNexus::from_i32(args.share)
+            {
+                Some(protocol) => protocol,
+                None => {
+                    return Err(Error::InvalidShareProtocol {
+                        sp_value: args.share as i32,
+                    })
+                }
+            };
+
             let nexus = nexus_lookup(&args.uuid)?;
-            nexus.share(key).await.map(|device_path| PublishNexusReply {
-                device_path,
+            nexus.share(share_protocol, key).await.map(|device_path| {
+                PublishNexusReply {
+                    device_path,
+                }
             })
         };
         fut.boxed_local()
@@ -174,6 +192,38 @@ pub(crate) fn register_rpc_methods() {
         let fut = async move {
             let nexus = nexus_lookup(&args.uuid)?;
             nexus.remove_child(&args.uri).await
+        };
+        fut.boxed_local()
+    });
+
+    jsonrpc_register("start_rebuild", |args: StartRebuildRequest| {
+        let fut = async move {
+            let nexus = nexus_lookup(&args.uuid)?;
+            nexus.start_rebuild_rpc(&args.uri).await
+        };
+        fut.boxed_local()
+    });
+
+    jsonrpc_register("stop_rebuild", |args: StopRebuildRequest| {
+        let fut = async move {
+            let nexus = nexus_lookup(&args.uuid)?;
+            nexus.stop_rebuild(&args.uri).await
+        };
+        fut.boxed_local()
+    });
+
+    jsonrpc_register("get_rebuild_state", |args: RebuildStateRequest| {
+        let fut = async move {
+            let nexus = nexus_lookup(&args.uuid)?;
+            nexus.get_rebuild_state(&args.uri).await
+        };
+        fut.boxed_local()
+    });
+
+    jsonrpc_register("get_rebuild_progress", |args: RebuildProgressRequest| {
+        let fut = async move {
+            let nexus = nexus_lookup(&args.uuid)?;
+            nexus.get_rebuild_progress().await
         };
         fut.boxed_local()
     });

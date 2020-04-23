@@ -1,5 +1,5 @@
 use mayastor::{
-    bdev::{nexus_create, nexus_lookup},
+    bdev::{nexus_create, nexus_lookup, uring_util},
     core::{
         mayastor_env_stop,
         Bdev,
@@ -10,6 +10,7 @@ use mayastor::{
     },
     nexus_uri::{bdev_create, bdev_destroy},
 };
+use std::sync::Once;
 
 static DISKNAME1: &str = "/tmp/disk1.img";
 static BDEVNAME1: &str = "aio:///tmp/disk1.img?blk_size=512";
@@ -17,10 +18,35 @@ static BDEVNAME1: &str = "aio:///tmp/disk1.img?blk_size=512";
 static DISKNAME2: &str = "/tmp/disk2.img";
 static BDEVNAME2: &str = "aio:///tmp/disk2.img?blk_size=512";
 
+static DISKNAME3: &str = "/tmp/disk3.img";
+static BDEVNAME3: &str = "uring:///tmp/disk3.img?blk_size=512";
+
+static mut DO_URING: bool = false;
+static INIT: Once = Once::new();
+
 pub mod common;
 
+fn do_uring() -> bool {
+    unsafe {
+        INIT.call_once(|| {
+            DO_URING = uring_util::fs_supports_direct_io(DISKNAME3)
+                && uring_util::fs_type_supported(DISKNAME3)
+                && uring_util::kernel_support();
+        });
+        DO_URING
+    }
+}
+
 async fn create_nexus() {
-    let ch = vec![BDEVNAME1.to_string(), BDEVNAME2.to_string()];
+    let ch = if do_uring() {
+        vec![
+            BDEVNAME1.to_string(),
+            BDEVNAME2.to_string(),
+            BDEVNAME3.to_string(),
+        ]
+    } else {
+        vec![BDEVNAME1.to_string(), BDEVNAME2.to_string()]
+    };
     nexus_create("core_nexus", 64 * 1024 * 1024, None, &ch)
         .await
         .unwrap();
@@ -31,6 +57,7 @@ fn core() {
     test_init!();
     common::truncate_file(DISKNAME1, 64 * 1024);
     common::truncate_file(DISKNAME2, 64 * 1024);
+    common::truncate_file(DISKNAME3, 64 * 1024);
 
     Reactor::block_on(async {
         works().await;
@@ -49,7 +76,7 @@ async fn works() {
     drop(desc);
 
     let n = nexus_lookup("core_nexus").expect("nexus not found");
-    n.destroy().await;
+    n.destroy().await.unwrap();
 }
 
 #[test]
@@ -73,7 +100,7 @@ fn core_2() {
         // we must drop the descriptors before we destroy the nexus
         drop(dbg!(d1));
         drop(dbg!(d2));
-        n.destroy().await;
+        n.destroy().await.unwrap();
     });
 }
 

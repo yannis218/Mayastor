@@ -19,22 +19,22 @@
 'use strict';
 
 const expect = require('chai').expect;
-const EventEmitter = require('events');
 const sinon = require('sinon');
 const sleep = require('sleep-promise');
 const Registry = require('../registry');
-const EventStream = require('../event_stream');
 const { GrpcError, GrpcCode } = require('../grpc_client');
 const PoolOperator = require('../pool_operator');
 const Pool = require('../pool');
 const Watcher = require('./watcher_stub');
 const Node = require('./node_stub');
 
-module.exports = function() {
+const NAMESPACE = 'mayastor';
+
+module.exports = function () {
   var msStub, putStub;
 
   // Create k8s pool resource object
-  function createPoolResource(
+  function createPoolResource (
     name,
     node,
     disks,
@@ -43,24 +43,25 @@ module.exports = function() {
     capacity,
     used
   ) {
-    let obj = {
+    const obj = {
       apiVersion: 'openebs.io/v1alpha1',
       kind: 'MayastorPool',
       metadata: {
         creationTimestamp: '2019-02-15T18:23:53Z',
         generation: 1,
         name: name,
+        namespace: NAMESPACE,
         resourceVersion: '627981',
-        selfLink: '/apis/openebs.io/v1alpha1/mayastorpools/pool-name',
-        uid: 'd99f06a9-314e-11e9-b086-589cfc0d76a7',
+        selfLink: `/apis/openebs.io/v1alpha1/namespaces/${NAMESPACE}/mayastorpools/${name}`,
+        uid: 'd99f06a9-314e-11e9-b086-589cfc0d76a7'
       },
       spec: {
         node: node,
-        disks: disks,
-      },
+        disks: disks
+      }
     };
     if (state) {
-      let status = { state };
+      const status = { state };
       if (reason != null) status.reason = reason;
       if (capacity != null) status.capacity = capacity;
       if (used != null) status.used = used;
@@ -74,29 +75,32 @@ module.exports = function() {
   // Note that this stub serves only for PUT method on mayastor resource
   // endpoint to update the status of resource. Fake watcher that is used
   // in the tests does not use this client stub.
-  function createK8sClient(watcher) {
-    let client = {
+  function createK8sClient (watcher) {
+    const mayastorpools = { mayastorpools: function (name) {} };
+    const namespaces = function (ns) {
+      expect(ns).to.equal(NAMESPACE);
+      return mayastorpools;
+    };
+    const client = {
       apis: {
         'openebs.io': {
-          v1alpha1: {
-            mayastorpools: function(name) {},
-          },
-        },
-      },
+          v1alpha1: { namespaces }
+        }
+      }
     };
-    msStub = sinon.stub(client.apis['openebs.io'].v1alpha1, 'mayastorpools');
-    let msObject = {
+    msStub = sinon.stub(mayastorpools, 'mayastorpools');
+    const msObject = {
       status: {
         // the tricky thing here is that we have to update watcher's cache
         // if we use this fake k8s client to change the object in order to
         // mimic real behaviour.
-        put: async function(payload) {
+        put: async function (payload) {
           watcher.objects[payload.body.metadata.name].status =
             payload.body.status;
           // simulate the asynchronicity of the put
-          //await sleep(1);
-        },
-      },
+          // await sleep(1);
+        }
+      }
     };
     putStub = sinon.stub(msObject.status, 'put');
     putStub.callThrough();
@@ -106,12 +110,12 @@ module.exports = function() {
 
   // Create a pool operator object suitable for testing - with fake watcher
   // and fake k8s api client.
-  async function MockedPoolOperator(k8sObjects, nodes) {
-    let oper = new PoolOperator();
-    let registry = new Registry();
+  async function MockedPoolOperator (k8sObjects, nodes) {
+    const oper = new PoolOperator(NAMESPACE);
+    const registry = new Registry();
     registry.Node = Node;
     nodes = nodes || [];
-    nodes.forEach(n => (registry.nodes[n.name] = n));
+    nodes.forEach((n) => (registry.nodes[n.name] = n));
     oper.registry = registry;
     oper.watcher = new Watcher(oper._filterMayastorPool, k8sObjects);
     oper.k8sClient = createK8sClient(oper.watcher);
@@ -132,14 +136,14 @@ module.exports = function() {
 
   describe('resource filter', () => {
     it('valid mayastor pool should pass the filter', () => {
-      let obj = createPoolResource(
+      const obj = createPoolResource(
         'pool',
         'node',
         ['/dev/sdc', '/dev/sdb'],
         'OFFLINE',
         'The node is down'
       );
-      let res = PoolOperator.prototype._filterMayastorPool(obj);
+      const res = PoolOperator.prototype._filterMayastorPool(obj);
       expect(res).to.have.all.keys('name', 'node', 'disks');
       expect(res.name).to.equal('pool');
       expect(res.node).to.equal('node');
@@ -153,8 +157,8 @@ module.exports = function() {
     });
 
     it('valid mayastor pool without status should pass the filter', () => {
-      let obj = createPoolResource('pool', 'node', ['/dev/sdc', '/dev/sdb']);
-      let res = PoolOperator.prototype._filterMayastorPool(obj);
+      const obj = createPoolResource('pool', 'node', ['/dev/sdc', '/dev/sdb']);
+      const res = PoolOperator.prototype._filterMayastorPool(obj);
       expect(res).to.have.all.keys('name', 'node', 'disks');
       expect(res.name).to.equal('pool');
       expect(res.node).to.equal('node');
@@ -177,16 +181,16 @@ module.exports = function() {
 
     describe('new event', () => {
       it('should set "state" to PENDING when creating a pool', async () => {
-        let node = new Node('node');
-        let createPoolStub = sinon.stub(node, 'createPool');
+        const node = new Node('node');
+        const createPoolStub = sinon.stub(node, 'createPool');
         createPoolStub.resolves(
           new Pool({
             name: 'pool',
             node: node,
             disks: ['/dev/sdb'],
-            state: 'DEGRADED',
+            state: 'POOL_DEGRADED',
             capacity: 100,
-            used: 10,
+            used: 10
           })
         );
         oper = await MockedPoolOperator([], [node]);
@@ -200,45 +204,63 @@ module.exports = function() {
 
         sinon.assert.calledOnce(createPoolStub);
         sinon.assert.calledWith(createPoolStub, 'pool', ['/dev/sdb']);
-        sinon.assert.calledTwice(msStub);
-        sinon.assert.alwaysCalledWith(msStub, 'pool');
-        sinon.assert.calledTwice(putStub);
-        sinon.assert.calledWithMatch(putStub.firstCall, {
+        sinon.assert.calledOnce(msStub);
+        sinon.assert.calledWith(msStub, 'pool');
+        sinon.assert.calledOnce(putStub);
+        sinon.assert.calledWithMatch(putStub, {
           body: {
             kind: 'MayastorPool',
             metadata: {
               name: 'pool',
               generation: 1,
-              resourceVersion: '627981',
+              resourceVersion: '627981'
             },
             status: {
-              state: 'PENDING',
-              reason: 'Creating the pool',
-            },
-          },
-        });
-        sinon.assert.calledWithMatch(putStub.secondCall, {
-          body: {
-            status: {
-              state: 'DEGRADED',
-              reason: '',
-              capacity: 100,
-              used: 10,
-            },
-          },
+              state: 'pending',
+              reason: 'Creating the pool'
+            }
+          }
         });
       });
 
+      it('should not try to create a pool if the node has not been synced', async () => {
+        const node = new Node('node');
+        sinon.stub(node, 'isSynced').returns(false);
+        const createPoolStub = sinon.stub(node, 'createPool');
+        createPoolStub.resolves(
+          new Pool({
+            name: 'pool',
+            node: node,
+            disks: ['/dev/sdb'],
+            state: 'POOL_DEGRADED',
+            capacity: 100,
+            used: 10
+          })
+        );
+        oper = await MockedPoolOperator([], [node]);
+        // trigger "new" event
+        oper.watcher.newObject(
+          createPoolResource('pool', 'node', ['/dev/sdb'])
+        );
+
+        // give event callbacks time to propagate
+        await sleep(10);
+
+        sinon.assert.notCalled(createPoolStub);
+        sinon.assert.notCalled(msStub);
+        sinon.assert.notCalled(putStub);
+      });
+
       it('should not try to create a pool when pool with the same name already exists', async () => {
-        let pool = new Pool({
+        const pool = new Pool({
           name: 'pool',
           disks: ['/dev/sdb'],
-          state: 'DEGRADED',
+          state: 'POOL_DEGRADED',
           capacity: 100,
-          used: 10,
+          used: 10
         });
-        let node = new Node('node', {}, []);
-        let createPoolStub = sinon.stub(node, 'createPool');
+        const node = new Node('node', {}, []);
+        const createPoolStub = sinon.stub(node, 'createPool');
         createPoolStub.resolves(pool);
         oper = await MockedPoolOperator([], [node]);
         // this creates the inconsistency between real and k8s state which we are testing
@@ -259,30 +281,29 @@ module.exports = function() {
         sinon.assert.calledWithMatch(putStub, {
           body: {
             status: {
-              state: 'DEGRADED',
+              state: 'degraded',
               reason: '',
               capacity: 100,
-              used: 10,
-            },
-          },
+              used: 10
+            }
+          }
         });
         sinon.assert.notCalled(createPoolStub);
       });
 
       // important test as moving the pool between nodes would destroy data
       it('should leave the pool untouched when pool exists and is on a different node', async () => {
-        let pool = new Pool({
+        const pool = new Pool({
           name: 'pool',
           disks: ['/dev/sdb'],
-          state: 'ONLINE',
-          reason: '',
+          state: 'POOL_ONLINE',
           capacity: 100,
-          used: 10,
+          used: 10
         });
-        let node1 = new Node('node1', {}, []);
-        let node2 = new Node('node2');
-        let createPoolStub1 = sinon.stub(node1, 'createPool');
-        let createPoolStub2 = sinon.stub(node2, 'createPool');
+        const node1 = new Node('node1', {}, []);
+        const node2 = new Node('node2');
+        const createPoolStub1 = sinon.stub(node1, 'createPool');
+        const createPoolStub2 = sinon.stub(node2, 'createPool');
         createPoolStub1.resolves(pool);
         createPoolStub2.resolves(pool);
         oper = await MockedPoolOperator([], [node1, node2]);
@@ -304,18 +325,18 @@ module.exports = function() {
         sinon.assert.calledWithMatch(putStub, {
           body: {
             status: {
-              state: 'ONLINE',
-              reason: '',
-            },
-          },
+              state: 'online',
+              reason: ''
+            }
+          }
         });
         sinon.assert.notCalled(createPoolStub1);
         sinon.assert.notCalled(createPoolStub2);
       });
 
       it('should set "reason" to error message when create pool fails', async () => {
-        let node = new Node('node');
-        let createPoolStub = sinon.stub(node, 'createPool');
+        const node = new Node('node');
+        const createPoolStub = sinon.stub(node, 'createPool');
         createPoolStub.rejects(
           new GrpcError(GrpcCode.INTERNAL, 'create failed')
         );
@@ -334,26 +355,26 @@ module.exports = function() {
         sinon.assert.calledWithMatch(putStub.firstCall, {
           body: {
             status: {
-              state: 'PENDING',
-              reason: 'Creating the pool',
-            },
-          },
+              state: 'pending',
+              reason: 'Creating the pool'
+            }
+          }
         });
         sinon.assert.calledWithMatch(putStub.secondCall, {
           body: {
             status: {
-              state: 'PENDING',
-              reason: 'Error: create failed',
-            },
-          },
+              state: 'pending',
+              reason: 'Error: create failed'
+            }
+          }
         });
         sinon.assert.calledOnce(createPoolStub);
         sinon.assert.calledWith(createPoolStub, 'pool', ['/dev/sdb']);
       });
 
       it('should ignore failure to update the resource state', async () => {
-        let node = new Node('node');
-        let createPoolStub = sinon.stub(node, 'createPool');
+        const node = new Node('node');
+        const createPoolStub = sinon.stub(node, 'createPool');
         createPoolStub.rejects(
           new GrpcError(GrpcCode.INTERNAL, 'create failed')
         );
@@ -373,18 +394,18 @@ module.exports = function() {
         sinon.assert.calledWithMatch(putStub.firstCall, {
           body: {
             status: {
-              state: 'PENDING',
-              reason: 'Creating the pool',
-            },
-          },
+              state: 'pending',
+              reason: 'Creating the pool'
+            }
+          }
         });
         sinon.assert.calledWithMatch(putStub.secondCall, {
           body: {
             status: {
-              state: 'PENDING',
-              reason: 'Error: create failed',
-            },
-          },
+              state: 'pending',
+              reason: 'Error: create failed'
+            }
+          }
         });
         sinon.assert.calledOnce(createPoolStub);
         sinon.assert.calledWith(createPoolStub, 'pool', ['/dev/sdb']);
@@ -406,24 +427,24 @@ module.exports = function() {
         sinon.assert.calledWithMatch(putStub, {
           body: {
             status: {
-              state: 'PENDING',
-              reason: 'mayastor does not run on node "node"',
-            },
-          },
+              state: 'pending',
+              reason: 'mayastor does not run on node "node"'
+            }
+          }
         });
       });
 
       it('should not create a pool if disk name is invalid', async () => {
-        let node = new Node('node');
-        let createPoolStub = sinon.stub(node, 'createPool');
+        const node = new Node('node');
+        const createPoolStub = sinon.stub(node, 'createPool');
         createPoolStub.resolves(
           new Pool({
             name: 'pool',
             node: node,
             disks: ['/dev/../sdb'],
-            state: 'ONLINE',
+            state: 'POOL_ONLINE',
             capacity: 100,
-            used: 4,
+            used: 4
           })
         );
         oper = await MockedPoolOperator([], [node]);
@@ -441,10 +462,10 @@ module.exports = function() {
         sinon.assert.calledWithMatch(putStub, {
           body: {
             status: {
-              state: 'PENDING',
-              reason: 'Disk must be absolute path beginning with /dev',
-            },
-          },
+              state: 'pending',
+              reason: 'Disk must be absolute path beginning with /dev'
+            }
+          }
         });
         sinon.assert.notCalled(createPoolStub);
       });
@@ -452,27 +473,27 @@ module.exports = function() {
 
     describe('del event', () => {
       it('should destroy a pool', async () => {
-        let pool = new Pool({
+        const pool = new Pool({
           name: 'pool',
           disks: ['/dev/sdb'],
-          state: 'DEGRADED',
+          state: 'POOL_DEGRADED',
           capacity: 100,
-          used: 10,
+          used: 10
         });
-        let destroyStub = sinon.stub(pool, 'destroy');
+        const destroyStub = sinon.stub(pool, 'destroy');
         destroyStub.resolves();
-        let node = new Node('node', {}, [pool]);
+        const node = new Node('node', {}, [pool]);
         oper = await MockedPoolOperator(
           [
             createPoolResource(
               'pool',
               'node',
               ['/dev/sdb'],
-              'DEGRADED',
+              'degraded',
               '',
               100,
               10
-            ),
+            )
           ],
           [node]
         );
@@ -488,14 +509,14 @@ module.exports = function() {
       });
 
       it('should not fail if pool does not exist', async () => {
-        let pool = new Pool({
+        const pool = new Pool({
           name: 'pool',
           disks: ['/dev/sdb'],
-          state: 'DEGRADED',
+          state: 'POOL_DEGRADED',
           capacity: 100,
-          used: 10,
+          used: 10
         });
-        let node = new Node('node', {}, [pool]);
+        const node = new Node('node', {}, [pool]);
         oper = await MockedPoolOperator(
           [createPoolResource('pool', 'node', ['/dev/sdb'], 'OFFLINE', '')],
           [node]
@@ -511,19 +532,19 @@ module.exports = function() {
       });
 
       it('should destroy the pool even if it is on a different node', async () => {
-        let pool = new Pool({
+        const pool = new Pool({
           name: 'pool',
           disks: ['/dev/sdb'],
-          state: 'DEGRADED',
+          state: 'POOL_DEGRADED',
           capacity: 100,
-          used: 10,
+          used: 10
         });
-        let destroyStub = sinon.stub(pool, 'destroy');
+        const destroyStub = sinon.stub(pool, 'destroy');
         destroyStub.resolves();
-        let node1 = new Node('node1', {}, []);
-        let node2 = new Node('node2', {}, [pool]);
+        const node1 = new Node('node1', {}, []);
+        const node2 = new Node('node2', {}, [pool]);
         oper = await MockedPoolOperator(
-          [createPoolResource('pool', 'node1', ['/dev/sdb'], 'ONLINE', '')],
+          [createPoolResource('pool', 'node1', ['/dev/sdb'], 'online', '')],
           [node1, node2]
         );
         // trigger "del" event
@@ -537,17 +558,17 @@ module.exports = function() {
       });
 
       it('should delete the resource even if the destroy fails', async () => {
-        let pool = new Pool({
+        const pool = new Pool({
           name: 'pool',
           disks: ['/dev/sdb'],
-          state: 'DEGRADED',
+          state: 'POOL_DEGRADED',
           capacity: 100,
           used: 10,
-          destroy: async function() {},
+          destroy: async function () {}
         });
-        let destroyStub = sinon.stub(pool, 'destroy');
+        const destroyStub = sinon.stub(pool, 'destroy');
         destroyStub.rejects(new GrpcError(GrpcCode.INTERNAL, 'destroy failed'));
-        let node = new Node('node', {}, [pool]);
+        const node = new Node('node', {}, [pool]);
         oper = await MockedPoolOperator(
           [createPoolResource('pool', 'node', ['/dev/sdb'], 'DEGRADED', '')],
           [node]
@@ -568,14 +589,14 @@ module.exports = function() {
 
     describe('mod event', () => {
       it('should not do anything if pool object has not changed', async () => {
-        let pool = new Pool({
+        const pool = new Pool({
           name: 'pool',
           disks: ['/dev/sdb', '/dev/sdc'],
-          state: 'DEGRADED',
+          state: 'POOL_DEGRADED',
           capacity: 100,
-          used: 10,
+          used: 10
         });
-        let node = new Node('node', {}, [pool]);
+        const node = new Node('node', {}, [pool]);
         oper = await MockedPoolOperator(
           [
             createPoolResource(
@@ -584,7 +605,7 @@ module.exports = function() {
               ['/dev/sdb', '/dev/sdc'],
               'DEGRADED',
               ''
-            ),
+            )
           ],
           [node]
         );
@@ -606,14 +627,14 @@ module.exports = function() {
       });
 
       it('should not do anything if disks change', async () => {
-        let pool = new Pool({
+        const pool = new Pool({
           name: 'pool',
           disks: ['/dev/sdb'],
-          state: 'DEGRADED',
+          state: 'POOL_DEGRADED',
           capacity: 100,
-          used: 10,
+          used: 10
         });
-        let node = new Node('node', {}, [pool]);
+        const node = new Node('node', {}, [pool]);
         oper = await MockedPoolOperator(
           [createPoolResource('pool', 'node', ['/dev/sdb'], 'DEGRADED', '')],
           [node]
@@ -635,15 +656,15 @@ module.exports = function() {
       });
 
       it('should not do anything if node changes', async () => {
-        let pool = new Pool({
+        const pool = new Pool({
           name: 'pool',
           disks: ['/dev/sdb'],
-          state: 'DEGRADED',
+          state: 'POOL_DEGRADED',
           capacity: 100,
-          used: 10,
+          used: 10
         });
-        let node1 = new Node('node1', {}, [pool]);
-        let node2 = new Node('node2', {}, []);
+        const node1 = new Node('node1', {}, [pool]);
+        const node2 = new Node('node2', {}, []);
         oper = await MockedPoolOperator(
           [createPoolResource('pool', 'node1', ['/dev/sdb'], 'DEGRADED', '')],
           [node1]
@@ -678,16 +699,16 @@ module.exports = function() {
     });
 
     it('should create pool upon node sync event if it does not exist', async () => {
-      let node = new Node('node', {}, []);
-      let createPoolStub = sinon.stub(node, 'createPool');
+      const node = new Node('node', {}, []);
+      const createPoolStub = sinon.stub(node, 'createPool');
       createPoolStub.resolves(
         new Pool({
           name: 'pool',
           node: node,
           disks: ['/dev/sdb'],
-          state: 'ONLINE',
+          state: 'POOL_ONLINE',
           capacity: 100,
-          used: 4,
+          used: 4
         })
       );
       oper = await MockedPoolOperator(
@@ -695,42 +716,31 @@ module.exports = function() {
         [node]
       );
 
-      sinon.assert.calledTwice(msStub);
-      sinon.assert.alwaysCalledWith(msStub, 'pool');
-      sinon.assert.calledTwice(putStub);
-      sinon.assert.calledWithMatch(putStub.firstCall, {
+      sinon.assert.calledOnce(msStub);
+      sinon.assert.calledWith(msStub, 'pool');
+      sinon.assert.calledOnce(putStub);
+      sinon.assert.calledWithMatch(putStub, {
         body: {
           status: {
-            state: 'PENDING',
-            reason: 'Creating the pool',
-          },
-        },
-      });
-      sinon.assert.calledWithMatch(putStub.secondCall, {
-        body: {
-          status: {
-            state: 'ONLINE',
-            reason: '',
-            capacity: 100,
-            used: 4,
-          },
-        },
+            state: 'pending',
+            reason: 'Creating the pool'
+          }
+        }
       });
       sinon.assert.calledOnce(createPoolStub);
       sinon.assert.calledWith(createPoolStub, 'pool', ['/dev/sdb']);
     });
 
     it('should not create pool upon node sync event if it exists', async () => {
-      let pool = new Pool({
+      const pool = new Pool({
         name: 'pool',
         disks: ['/dev/sdb'],
-        state: 'ONLINE',
-        reason: '',
+        state: 'POOL_ONLINE',
         capacity: 100,
-        used: 4,
+        used: 4
       });
-      let node = new Node('node', {}, [pool]);
-      let createPoolStub = sinon.stub(node, 'createPool');
+      const node = new Node('node', {}, [pool]);
+      const createPoolStub = sinon.stub(node, 'createPool');
       createPoolStub.resolves(pool);
       oper = await MockedPoolOperator(
         [
@@ -738,11 +748,11 @@ module.exports = function() {
             'pool',
             'node',
             ['/dev/sdb'],
-            'ONLINE',
+            'online',
             '',
             100,
             4
-          ),
+          )
         ],
         [node]
       );
@@ -753,17 +763,17 @@ module.exports = function() {
     });
 
     it('should not create pool upon node sync event if it exists on another node', async () => {
-      let pool = new Pool({
+      const pool = new Pool({
         name: 'pool',
         disks: ['/dev/sdb'],
-        state: 'ONLINE',
+        state: 'POOL_ONLINE',
         capacity: 100,
-        used: 4,
+        used: 4
       });
-      let node1 = new Node('node1', {}, []);
-      let node2 = new Node('node2', {}, [pool]);
-      let createPoolStub1 = sinon.stub(node1, 'createPool');
-      let createPoolStub2 = sinon.stub(node2, 'createPool');
+      const node1 = new Node('node1', {}, []);
+      const node2 = new Node('node2', {}, [pool]);
+      const createPoolStub1 = sinon.stub(node1, 'createPool');
+      const createPoolStub2 = sinon.stub(node2, 'createPool');
       createPoolStub1.resolves(pool);
       createPoolStub2.resolves(pool);
       oper = await MockedPoolOperator(
@@ -772,11 +782,11 @@ module.exports = function() {
             'pool',
             'node1',
             ['/dev/sdb'],
-            'ONLINE',
+            'online',
             '',
             100,
             4
-          ),
+          )
         ],
         [node1, node2]
       );
@@ -788,17 +798,17 @@ module.exports = function() {
     });
 
     it('should remove pool upon pool new event if there is no pool resource', async () => {
-      let pool = new Pool({
+      const pool = new Pool({
         name: 'pool',
         disks: ['/dev/sdb'],
-        state: 'ONLINE',
+        state: 'POOL_ONLINE',
         capacity: 100,
         used: 4,
-        destroy: async function() {},
+        destroy: async function () {}
       });
-      let destroyStub = sinon.stub(pool, 'destroy');
+      const destroyStub = sinon.stub(pool, 'destroy');
       destroyStub.resolves();
-      let node = new Node('node', {}, [pool]);
+      const node = new Node('node', {}, [pool]);
       oper = await MockedPoolOperator([], [node]);
 
       sinon.assert.notCalled(msStub);
@@ -807,35 +817,35 @@ module.exports = function() {
     });
 
     it('should update resource properties upon pool mod event', async () => {
-      let pool = new Pool({
+      const offlineReason = 'mayastor does not run on the node "node"';
+      const pool = new Pool({
         name: 'pool',
         disks: ['/dev/sdb'],
-        state: 'ONLINE',
+        state: 'POOL_ONLINE',
         capacity: 100,
-        used: 4,
+        used: 4
       });
-      let node = new Node('node', {}, [pool]);
+      const node = new Node('node', {}, [pool]);
       oper = await MockedPoolOperator(
         [
           createPoolResource(
             'pool',
             'node',
             ['/dev/sdb'],
-            'ONLINE',
+            'online',
             '',
             100,
             4
-          ),
+          )
         ],
         [node]
       );
 
-      pool.state = 'OFFLINE';
-      pool.reason = 'Node is down';
+      pool.state = 'POOL_OFFLINE';
       // simulate pool mod event
       oper.registry.emit('pool', {
         eventType: 'mod',
-        object: pool,
+        object: pool
       });
 
       // Give event time to propagate
@@ -847,17 +857,17 @@ module.exports = function() {
       sinon.assert.calledWithMatch(putStub, {
         body: {
           status: {
-            state: 'OFFLINE',
-            reason: 'Node is down',
-          },
-        },
+            state: 'offline',
+            reason: offlineReason
+          }
+        }
       });
-      expect(oper.watcher.objects.pool.status.state).to.equal('OFFLINE');
-      expect(oper.watcher.objects.pool.status.reason).to.equal('Node is down');
+      expect(oper.watcher.objects.pool.status.state).to.equal('offline');
+      expect(oper.watcher.objects.pool.status.reason).to.equal(offlineReason);
     });
 
     it('should ignore pool mod event if pool resource does not exist', async () => {
-      let node = new Node('node', {}, []);
+      const node = new Node('node', {}, []);
       oper = await MockedPoolOperator([], [node]);
 
       oper.registry.emit('pool', {
@@ -865,11 +875,10 @@ module.exports = function() {
         object: new Pool({
           name: 'pool',
           disks: ['/dev/sdb'],
-          state: 'OFFLINE',
-          reason: 'Node is down',
+          state: 'POOL_OFFLINE',
           capacity: 100,
-          used: 4,
-        }),
+          used: 4
+        })
       });
 
       // Give event time to propagate
@@ -883,15 +892,15 @@ module.exports = function() {
     });
 
     it('should create pool upon pool del event if pool resource exist', async () => {
-      let pool = new Pool({
+      const pool = new Pool({
         name: 'pool',
         disks: ['/dev/sdb'],
-        state: 'ONLINE',
+        state: 'POOL_ONLINE',
         capacity: 100,
-        used: 4,
+        used: 4
       });
-      let node = new Node('node', {}, [pool]);
-      let createPoolStub = sinon.stub(node, 'createPool');
+      const node = new Node('node', {}, [pool]);
+      const createPoolStub = sinon.stub(node, 'createPool');
       createPoolStub.resolves(pool);
       oper = await MockedPoolOperator(
         [
@@ -899,11 +908,11 @@ module.exports = function() {
             'pool',
             'node',
             ['/dev/sdb'],
-            'ONLINE',
+            'online',
             '',
             100,
             4
-          ),
+          )
         ],
         [node]
       );
@@ -914,39 +923,29 @@ module.exports = function() {
       node.pools = [];
       oper.registry.emit('pool', {
         eventType: 'del',
-        object: pool,
+        object: pool
       });
 
       // Give event time to propagate
       await sleep(10);
 
-      sinon.assert.calledTwice(msStub);
-      sinon.assert.alwaysCalledWith(msStub, 'pool');
-      sinon.assert.calledTwice(putStub);
-      sinon.assert.calledWithMatch(putStub.firstCall, {
+      sinon.assert.calledOnce(msStub);
+      sinon.assert.calledWith(msStub, 'pool');
+      sinon.assert.calledOnce(putStub);
+      sinon.assert.calledWithMatch(putStub, {
         body: {
           status: {
-            state: 'PENDING',
-            reason: 'Creating the pool',
-          },
-        },
-      });
-      sinon.assert.calledWithMatch(putStub.secondCall, {
-        body: {
-          status: {
-            state: 'ONLINE',
-            reason: '',
-            capacity: 100,
-            used: 4,
-          },
-        },
+            state: 'pending',
+            reason: 'Creating the pool'
+          }
+        }
       });
       sinon.assert.calledOnce(createPoolStub);
       sinon.assert.calledWith(createPoolStub, 'pool', ['/dev/sdb']);
     });
 
     it('should ignore pool del event if pool resource does not exist', async () => {
-      let node = new Node('node', {}, []);
+      const node = new Node('node', {}, []);
       oper = await MockedPoolOperator([], [node]);
 
       oper.registry.emit('pool', {
@@ -954,10 +953,10 @@ module.exports = function() {
         object: new Pool({
           name: 'pool',
           disks: ['/dev/sdb'],
-          state: 'ONLINE',
+          state: 'POOL_ONLINE',
           capacity: 100,
-          used: 4,
-        }),
+          used: 4
+        })
       });
 
       // Give event time to propagate

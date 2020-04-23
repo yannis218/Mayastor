@@ -34,25 +34,26 @@ enum Sub {
         uuid: String,
     },
     #[structopt(name = "create")]
-    /// Create a nexus using the given URI's
+    /// Create a nexus using the given URIs
     ///
     /// Example:
     ///
     /// mctl create `uuidgen -r` -c nvmf://host1/nqn nvmf://host2/nqn -s 1GiB
     ///
-    /// The child URI's should be in the form of:
+    /// The child URIs should be in the form of:
     ///
     /// nvmf://host/nqn
     /// iscsi://host/iqn
     /// aio:///path/to/file
+    /// uring:///path/to/file
     Create {
         #[structopt(name = "uuid")]
         uuid: String,
         #[structopt(short, long, parse(try_from_str = "convert::parse_size"))]
-        /// The size of the nexus to be created i.e 100MiB
+        /// The size of the nexus to be created e.g. 100MiB
         size: u64,
         #[structopt(short, long, required = true, min_values = 1)]
-        /// The URI's to be should for this nexus
+        /// The URIs to be used for this nexus
         children: Vec<String>,
     },
     #[structopt(name = "list")]
@@ -71,7 +72,7 @@ enum Sub {
     },
 
     #[structopt(name = "online")]
-    /// Online a child from the nexus
+    /// Online a child bdev from the nexus
     Online {
         #[structopt(name = "uuid")]
         /// UUID of the nexus
@@ -88,6 +89,13 @@ enum Sub {
         #[structopt(name = "uuid")]
         /// UUID of the nexus to be published
         uuid: String,
+        /// Protocol to use when sharing the nexus.
+        /// Can be NVMf, ISCSI, NBD
+        #[structopt(
+            name = "protocol",
+            parse(try_from_str = "convert::parse_proto")
+        )]
+        protocol: ShareProtocolNexus,
         /// 128 bit encryption key to be used for encrypting the data section
         /// of the nexus.
         #[structopt(name = "key", default_value = "")]
@@ -172,11 +180,15 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         Sub::Publish {
             uuid,
             key,
+            protocol,
         } => serde_json::to_string_pretty(
             &call::<_, PublishNexusReply>(
                 &opt.socket,
                 "publish_nexus",
-                Some(json!({ "uuid": uuid , "key" : key})),
+                Some(json!({ "uuid": uuid,
+                    "share" : protocol as i32,
+                    "key" : key,
+                })),
             )
             .await?,
         )?,

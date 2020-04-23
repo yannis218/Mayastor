@@ -1,0 +1,28 @@
+name: "Lint and style Checks"
+on:
+  pull_request:
+jobs:
+  Clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/mayadata/ms-buildenv:nix
+    steps:
+      - uses: actions/checkout@master
+      - uses: actions-rs/toolchain@master
+        with:
+          toolchain: nightly
+          components: clippy
+      - uses: actions-rs/clippy-check@v1.0.5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --all --all-targets -- -D warnings
+  Semistandard:
+    name: SemiStandard
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/mayadata/ms-buildenv:nix
+    steps:
+      - uses: actions/checkout@master
+      - run: git diff-tree --no-commit-id --name-only -r ${{ github.sha }} | grep '\.js$' || true | xargs -r semistandard --env node --env mocha
+        shell: bash

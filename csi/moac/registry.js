@@ -22,7 +22,7 @@ const Node = require('./node');
 const eventObjects = ['node', 'nexus', 'pool', 'replica'];
 
 class Registry extends EventEmitter {
-  constructor() {
+  constructor () {
     super();
     this.nodes = {}; // node objects indexed by name
     // This gives a chance to override Node class used for creating new
@@ -31,9 +31,9 @@ class Registry extends EventEmitter {
   }
 
   // Disconnect all nodes.
-  close() {
-    let self = this;
-    Object.keys(this.nodes).forEach(name => {
+  close () {
+    const self = this;
+    Object.keys(this.nodes).forEach((name) => {
       self.removeNode(name);
     });
   }
@@ -43,7 +43,7 @@ class Registry extends EventEmitter {
   //
   // @param {string} name      Name of the node.
   // @param {string} endpoint  Endpoint for gRPC communication.
-  addNode(name, endpoint) {
+  addNode (name, endpoint) {
     var node = new this.Node(name);
     node.connect(endpoint);
     this._registerNode(node);
@@ -56,7 +56,7 @@ class Registry extends EventEmitter {
   // nodes.
   //
   // @param {object} node    Node object to register.
-  _registerNode(node) {
+  _registerNode (node) {
     assert(!this.nodes[node.name]);
     this.nodes[node.name] = node;
 
@@ -65,23 +65,23 @@ class Registry extends EventEmitter {
     );
 
     var self = this;
-    eventObjects.forEach(objType => {
-      node.on(objType, ev => self.emit(objType, ev));
+    eventObjects.forEach((objType) => {
+      node.on(objType, (ev) => self.emit(objType, ev));
     });
   }
 
   // Remove mayastor node from the list of nodes and unsubscribe events.
   //
   // @param {string} name   Name of the node to remove.
-  removeNode(name) {
-    let node = this.nodes[name];
+  removeNode (name) {
+    const node = this.nodes[name];
     delete this.nodes[name];
     assert(node);
     node.disconnect();
 
     log.info(`mayastor on node "${name}" left`);
 
-    eventObjects.forEach(objType => {
+    eventObjects.forEach((objType) => {
       node.removeAllListeners(objType);
     });
   }
@@ -91,7 +91,7 @@ class Registry extends EventEmitter {
   //
   // @param   {string} name    Name of the node to return.
   // @returns {(object|Array)} Node object or null if not found or list of all objects.
-  getNode(name) {
+  getNode (name) {
     if (name) {
       return this.nodes[name] || null;
     } else {
@@ -104,13 +104,13 @@ class Registry extends EventEmitter {
   //
   // @param   {string} [name]     Name of the storage pool.
   // @returns {(object|object[])} Pool object (null if not found) or list of all objects.
-  getPool(name) {
-    let pools = Object.values(this.nodes).reduce(
+  getPool (name) {
+    const pools = Object.values(this.nodes).reduce(
       (acc, node) => acc.concat(node.pools),
       []
     );
     if (name) {
-      return pools.find(p => p.name === name) || null;
+      return pools.find((p) => p.name === name) || null;
     } else {
       return pools;
     }
@@ -121,13 +121,13 @@ class Registry extends EventEmitter {
   //
   // @param   {string} [uuid]     ID of the nexus.
   // @returns {(object|object[])} Nexus object (null if not found) or list of all objects.
-  getNexus(uuid) {
-    let nexus = Object.values(this.nodes).reduce(
+  getNexus (uuid) {
+    const nexus = Object.values(this.nodes).reduce(
       (acc, node) => acc.concat(node.nexus),
       []
     );
     if (uuid) {
-      return nexus.find(n => n.uuid === uuid) || null;
+      return nexus.find((n) => n.uuid === uuid) || null;
     } else {
       return nexus;
     }
@@ -138,13 +138,13 @@ class Registry extends EventEmitter {
   //
   // @param   {string}    [uuid]  Replica ID.
   // @returns {object[]}  Array of matching replicas.
-  getReplicaSet(uuid) {
-    let replicas = Object.values(this.nodes).reduce(
+  getReplicaSet (uuid) {
+    const replicas = Object.values(this.nodes).reduce(
       (acc, node) => acc.concat(node.getReplicas()),
       []
     );
     if (uuid) {
-      return replicas.filter(r => r.uuid === uuid);
+      return replicas.filter((r) => r.uuid === uuid);
     } else {
       return replicas;
     }
@@ -156,17 +156,17 @@ class Registry extends EventEmitter {
   // @param {string}   [nodeName]  Name of the node to get the capacity for.
   // @returns {number} Total capacity in bytes.
   //
-  getCapacity(nodeName) {
-    let capacity = 0;
+  getCapacity (nodeName) {
+    const capacity = 0;
     let pools;
 
     if (nodeName) {
-      pools = this.getPool().filter(p => p.node.name == nodeName);
+      pools = this.getPool().filter((p) => p.node.name == nodeName);
     } else {
       pools = this.getPool();
     }
     return pools
-      .filter(p => p.isAccessible())
+      .filter((p) => p.isAccessible())
       .reduce((acc, p) => acc + (p.capacity - p.used), 0);
   }
 
@@ -178,8 +178,8 @@ class Registry extends EventEmitter {
   //  2) must have sufficient space
   //  3) the least busy pools first
   //
-  choosePools(requiredBytes, mustNodes, shouldNodes) {
-    let pools = this.getPool().filter(p => {
+  choosePools (requiredBytes, mustNodes, shouldNodes) {
+    let pools = this.getPool().filter((p) => {
       return (
         p.isAccessible() &&
         p.capacity - p.used >= requiredBytes &&
@@ -204,9 +204,9 @@ class Registry extends EventEmitter {
       }
 
       // Rule #2: Avoid degraded pools whenever possible
-      if (a.state == 'ONLINE' && b.state != 'ONLINE') {
+      if (a.state == 'POOL_ONLINE' && b.state != 'POOL_ONLINE') {
         return -1;
-      } else if (a.state != 'ONLINE' && b.state == 'ONLINE') {
+      } else if (a.state != 'POOL_ONLINE' && b.state == 'POOL_ONLINE') {
         return 1;
       }
 
@@ -218,14 +218,14 @@ class Registry extends EventEmitter {
       }
 
       // Rule #4: Pools with more free space take precedence
-      let aFree = a.capacity - a.used;
-      let bFree = b.capacity - b.used;
+      const aFree = a.capacity - a.used;
+      const bFree = b.capacity - b.used;
       return bFree - aFree;
     });
 
     // only one pool from each node
-    let nodes = [];
-    pools = pools.filter(p => {
+    const nodes = [];
+    pools = pools.filter((p) => {
       if (nodes.indexOf(p.node) < 0) {
         nodes.push(p.node);
         return true;

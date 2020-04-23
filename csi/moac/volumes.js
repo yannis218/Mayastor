@@ -11,23 +11,23 @@ const log = require('./logger').Logger('volumes');
 
 // Volume manager that emit events for new/modified/deleted volumes.
 class Volumes extends EventEmitter {
-  constructor(registry) {
+  constructor (registry) {
     super();
     this.registry = registry;
     this.events = null; // stream of events from registry
     this.volumes = {}; // volumes indexed by uuid
   }
 
-  start() {
+  start () {
     var self = this;
-    this.events = new EventStream(this.registry);
-    this.events.on('data', async function(ev) {
+    this.events = new EventStream({ registry: this.registry });
+    this.events.on('data', async function (ev) {
       if (ev.kind != 'replica' && ev.kind != 'nexus') {
         // not interesed in node and pool events
         return;
       }
-      let uuid = ev.object.uuid;
-      let volume = self.volumes[uuid];
+      const uuid = ev.object.uuid;
+      const volume = self.volumes[uuid];
       if (!volume) {
         // Ignore events for volumes that do not exist. Those might be events
         // related to a volume that is being destroyed.
@@ -51,14 +51,14 @@ class Volumes extends EventEmitter {
           volume.delNexus(ev.object);
         }
       }
-      this.emit('volume', {
+      self.emit('volume', {
         eventType: 'mod',
-        object: volume,
+        object: volume
       });
     });
   }
 
-  stop() {
+  stop () {
     this.events.destroy();
     this.events.removeAllListeners();
     this.events = null;
@@ -70,7 +70,7 @@ class Volumes extends EventEmitter {
   // @param   {string}          uuid   ID of the volume.
   // @returns {object|object[]} Matching volume (or null if not found) or all volumes.
   //
-  get(uuid) {
+  get (uuid) {
     if (uuid) return this.volumes[uuid] || null;
     else return Object.values(this.volumes);
   }
@@ -79,65 +79,67 @@ class Volumes extends EventEmitter {
   // of volumes. The method is idempotent. If a volume with the same uuid
   // already exists, then update its parameters.
   //
-  // @param   {string}   uuid            ID of the volume.
-  // @params  {number}   replicaCount    Number of desired replicas.
-  // @params  {string[]} preferredNodes  Nodes to prefer for scheduling replicas.
-  // @params  {string[]} requiredNodes   Replicas must be on these nodes.
-  // @params  {number}   requiredBytes   The volume must have at least this size.
-  // @params  {number}   limitBytes      The volume should not be bigger than this.
+  // @param   {string}   uuid                 ID of the volume.
+  // @param   {object}   spec                 Properties of the volume.
+  // @params  {number}   spec.replicaCount    Number of desired replicas.
+  // @params  {string[]} spec.preferredNodes  Nodes to prefer for scheduling replicas.
+  // @params  {string[]} spec.requiredNodes   Replicas must be on these nodes.
+  // @params  {number}   spec.requiredBytes   The volume must have at least this size.
+  // @params  {number}   spec.limitBytes      The volume should not be bigger than this.
   // @returns {object}   New volume object.
   //
-  async createVolume(
-    uuid,
-    replicaCount,
-    preferredNodes,
-    requiredNodes,
-    requiredBytes,
-    limitBytes
-  ) {
-    if (!requiredBytes || requiredBytes < 0) {
+  async createVolume (uuid, spec) {
+    let created = false;
+
+    if (!spec.requiredBytes || spec.requiredBytes < 0) {
       throw new GrpcError(
         GrpcCode.INVALID_ARGUMENT,
         'Required bytes must be greater than zero'
       );
     }
-    let opts = {
-      replicaCount,
-      preferredNodes,
-      requiredNodes,
-      requiredBytes,
-      limitBytes,
-    };
     let volume = this.volumes[uuid];
     if (volume) {
-      if (!volume.merge(opts)) {
+      if (!volume.update(spec)) {
         // exactly the same volume exists - no work
         return volume;
       } else {
         // TODO: What to do if size changes and is incompatible?
         this.emit('volume', {
           eventType: 'mod',
-          object: volume,
+          object: volume
         });
       }
     } else {
-      volume = new Volume(uuid, this.registry, opts);
+      created = true;
+      volume = new Volume(uuid, this.registry, spec);
       // The volume starts to exist before it is created because we must receive
       // events for it and we want to show to user that it is being created.
       this.volumes[uuid] = volume;
       this.emit('volume', {
         eventType: 'new',
-        object: volume,
+        object: volume
       });
       // check for components that already exist and assign them to the volume
       var self = this;
-      this.registry.getReplicaSet(uuid).forEach(r => self.newReplica(r));
-      let nexus = this.registry.getNexus(uuid);
+      this.registry.getReplicaSet(uuid).forEach((r) => volume.newReplica(r));
+      const nexus = this.registry.getNexus(uuid);
       if (nexus) {
         volume.newNexus(nexus);
       }
     }
-    await volume.ensure();
+    try {
+      await volume.ensure();
+    } catch (err) {
+      // undo the PENDING state
+      if (created) {
+        delete this.volumes[uuid];
+        this.emit('volume', {
+          eventType: 'del',
+          object: volume
+        });
+      }
+      throw err;
+    }
     return volume;
   }
 
@@ -148,15 +150,15 @@ class Volumes extends EventEmitter {
   //
   // @param   {string}   uuid            ID of the volume.
   //
-  async destroyVolume(uuid) {
-    let volume = this.volumes[uuid];
+  async destroyVolume (uuid) {
+    const volume = this.volumes[uuid];
     if (!volume) return;
 
     await volume.destroy();
     delete this.volumes[uuid];
     this.emit('volume', {
       eventType: 'del',
-      object: volume,
+      object: volume
     });
   }
 }

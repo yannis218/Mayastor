@@ -26,10 +26,11 @@ impl service::mayastor_server::Mayastor for MayastorService {
         }
 
         debug!(
-            "Creating pool {} on {} with block size {}...",
+            "Creating pool {} on {} with block size {}, io_if {}...",
             msg.name,
             msg.disks.join(" "),
             msg.block_size,
+            msg.io_if,
         );
 
         // make a copy of vars used in the closures below
@@ -39,6 +40,7 @@ impl service::mayastor_server::Mayastor for MayastorService {
             name: msg.name,
             disks: msg.disks,
             block_size: Some(msg.block_size),
+            io_if: Some(msg.io_if),
         });
 
         jsonrpc::call::<_, ()>(&self.socket, "create_or_import_pool", args)
@@ -101,10 +103,10 @@ impl service::mayastor_server::Mayastor for MayastorService {
                     capacity: p.capacity,
                     used: p.used,
                     state: match p.state.as_str() {
-                        "online" => PoolState::Online,
-                        "degraded" => PoolState::Degraded,
-                        "faulty" => PoolState::Faulty,
-                        _ => PoolState::Faulty,
+                        "online" => PoolState::PoolOnline,
+                        "degraded" => PoolState::PoolDegraded,
+                        "faulty" => PoolState::PoolFaulted,
+                        _ => PoolState::PoolFaulted,
                     } as i32,
                 })
                 .collect(),
@@ -332,5 +334,56 @@ impl service::mayastor_server::Mayastor for MayastorService {
         jsonrpc::call::<_, ()>(&self.socket, "remove_child_nexus", Some(msg))
             .await?;
         Ok(Response::new(Null {}))
+    }
+
+    async fn start_rebuild(
+        &self,
+        request: Request<StartRebuildRequest>,
+    ) -> Result<Response<Null>, Status> {
+        let msg = request.into_inner();
+        trace!("{:?}", msg);
+        jsonrpc::call::<_, ()>(&self.socket, "start_rebuild", Some(msg))
+            .await?;
+        Ok(Response::new(Null {}))
+    }
+
+    async fn stop_rebuild(
+        &self,
+        request: Request<StopRebuildRequest>,
+    ) -> Result<Response<Null>, Status> {
+        let msg = request.into_inner();
+        trace!("{:?}", msg);
+        jsonrpc::call::<_, ()>(&self.socket, "stop_rebuild", Some(msg)).await?;
+        Ok(Response::new(Null {}))
+    }
+
+    async fn get_rebuild_state(
+        &self,
+        request: Request<RebuildStateRequest>,
+    ) -> Result<Response<RebuildStateReply>, Status> {
+        let msg = request.into_inner();
+        trace!("{:?}", msg);
+        let r = jsonrpc::call::<_, RebuildStateReply>(
+            &self.socket,
+            "get_rebuild_state",
+            Some(msg),
+        )
+        .await?;
+        Ok(Response::new(r))
+    }
+
+    async fn get_rebuild_progress(
+        &self,
+        request: Request<RebuildProgressRequest>,
+    ) -> Result<Response<RebuildProgressReply>, Status> {
+        let msg = request.into_inner();
+        trace!("{:?}", msg);
+        let r = jsonrpc::call::<_, RebuildProgressReply>(
+            &self.socket,
+            "get_rebuild_progress",
+            Some(msg),
+        )
+        .await?;
+        Ok(Response::new(r))
     }
 }

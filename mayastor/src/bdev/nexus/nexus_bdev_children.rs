@@ -22,26 +22,35 @@
 //! When reconfiguring the nexus, we traverse all our children, create new IO
 //! channels for all children that are in the open state.
 
+use crossbeam::channel::Receiver;
 use futures::future::join_all;
+use rpc::mayastor::RebuildStateReply;
 use snafu::ResultExt;
 
 use crate::{
     bdev::nexus::{
         nexus_bdev::{
+            nexus_lookup,
             CreateChild,
             DestroyChild,
             Error,
             Nexus,
             NexusState,
             OpenChild,
-            ReadLabel,
+            StartRebuild,
         },
         nexus_channel::DREvent,
         nexus_child::{ChildState, NexusChild},
-        nexus_label::NexusLabel,
+        nexus_label::{
+            LabelError,
+            NexusChildLabel,
+            NexusLabel,
+            NexusLabelStatus,
+        },
     },
-    core::Bdev,
+    core::{Bdev, Reactors},
     nexus_uri::{bdev_create, bdev_destroy, BdevCreateDestroy},
+    rebuild::{RebuildActions, RebuildState, RebuildTask},
 };
 
 impl Nexus {
@@ -63,9 +72,9 @@ impl Nexus {
             .for_each(drop);
     }
 
-    /// register a single child to nexus, only allowed during the nexus init
-    /// phase
-    pub async fn register_child(
+    /// Create and register a single child to nexus, only allowed during the
+    /// nexus init phase
+    pub async fn create_and_register(
         &mut self,
         uri: &str,
     ) -> Result<(), BdevCreateDestroy> {
@@ -138,10 +147,17 @@ impl Nexus {
                 // mark faulted so that it can never take part in the IO path of
                 // the nexus until brought online.
                 child.state = ChildState::Faulted;
+
                 self.children.push(child);
                 self.child_count += 1;
-                // TODO -- rsync labels
-                Ok(self.set_state(NexusState::Degraded))
+                self.set_state(NexusState::Degraded);
+
+                if let Err(e) = self.sync_labels().await {
+                    error!("Failed to sync labels {:?}", e);
+                    // todo: how to signal this?
+                }
+
+                Ok(self.state)
             }
             Err(e) => {
                 if let Err(err) = bdev_destroy(uri).await {
@@ -155,6 +171,186 @@ impl Nexus {
                     name: self.name.clone(),
                 })
             }
+        }
+    }
+
+    pub async fn start_rebuild_rpc(
+        &mut self,
+        destination: &str,
+    ) -> Result<(), Error> {
+        if let Err(e) = self.start_rebuild(destination).await {
+            Err(e)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn start_rebuild(
+        &mut self,
+        destination: &str,
+    ) -> Result<Receiver<RebuildState>, Error> {
+        trace!("{}: start rebuild request for {}", self.name, destination);
+
+        let source = match self
+            .children
+            .iter_mut()
+            .find(|c| c.state == ChildState::Open)
+        {
+            Some(child) => child.name.clone(),
+            None => {
+                return Err(Error::OpenChildNotFound {
+                    name: self.name.clone(),
+                })
+            }
+        };
+
+        if let Some(dst_child) =
+            self.children.iter_mut().find(|c| c.name == destination)
+        {
+            self.rebuilds.push(
+                RebuildTask::new(
+                    self.name.clone(),
+                    source,
+                    destination.to_string(),
+                    self.data_ent_offset,
+                    self.bdev.num_blocks() + self.data_ent_offset,
+                    |nexus, task| {
+                        Reactors::current().send_future(async move {
+                            Nexus::complete_rebuild(nexus, task).await;
+                        });
+                    },
+                )
+                .context(StartRebuild {
+                    child: destination.to_string(),
+                    name: self.name.clone(),
+                })?,
+            );
+
+            dst_child.repairing = true;
+
+            match self
+                .rebuilds
+                .iter_mut()
+                .find(|t| t.destination == destination)
+            {
+                Some(task) => Ok(task.start()),
+                None => Err(Error::CompleteRebuild {
+                    child: destination.to_string(),
+                    name: self.name.clone(),
+                    reason: "rebuild task not found in the nexus".to_string(),
+                }),
+            }
+        } else {
+            Err(Error::ChildNotFound {
+                name: self.name.clone(),
+                child: destination.to_owned(),
+            })
+        }
+    }
+
+    /// Return rebuild task associated with the destination.
+    /// Return error if no rebuild task associated with destination.
+    fn get_rebuild_task(
+        &mut self,
+        destination: &str,
+    ) -> Result<&mut RebuildTask, Error> {
+        match self
+            .rebuilds
+            .iter_mut()
+            .find(|t| t.destination == destination)
+        {
+            Some(rt) => Ok(rt),
+            None => Err(Error::RebuildTaskNotFound {
+                child: destination.to_string(),
+                name: self.name.clone(),
+            }),
+        }
+    }
+
+    /// Stop a rebuild task
+    pub async fn stop_rebuild(
+        &mut self,
+        destination: &str,
+    ) -> Result<(), Error> {
+        let rt = self.get_rebuild_task(destination)?;
+        rt.stop();
+        Ok(())
+    }
+
+    /// Return the state of a rebuild task
+    pub async fn get_rebuild_state(
+        &mut self,
+        destination: &str,
+    ) -> Result<RebuildStateReply, Error> {
+        let rt = self.get_rebuild_task(destination)?;
+        Ok(RebuildStateReply {
+            state: rt.state.to_string(),
+        })
+    }
+
+    /// On rebuild task completion it updates the child state and removes the
+    /// rebuild task in case of failure the child is left in a Faulted State
+    async fn on_rebuild_complete(&mut self, task: String) -> Result<(), Error> {
+        let task_index =
+            match self.rebuilds.iter().position(|t| t.destination == task) {
+                Some(task_index) => task_index,
+                None => {
+                    return Err(Error::CompleteRebuild {
+                        child: task,
+                        name: self.name.clone(),
+                        reason: "rebuild task not found in the nexus"
+                            .to_string(),
+                    });
+                }
+            };
+
+        let task = self.rebuilds.remove(task_index);
+
+        let recovered_child = match self
+            .children
+            .iter_mut()
+            .find(|c| c.name == task.destination)
+        {
+            Some(child) => child,
+            None => {
+                return Err(Error::CompleteRebuild {
+                    child: task.destination,
+                    name: self.name.clone(),
+                    reason: "Missing destination child".to_string(),
+                });
+            }
+        };
+
+        recovered_child.repairing = false;
+
+        if task.state == RebuildState::Completed {
+            recovered_child.state = ChildState::Open;
+
+            // child can now be part of the IO path
+            self.reconfigure(DREvent::ChildOnline).await;
+
+            // Actually we'd have to check if all other children are healthy
+            // and if not maybe we can start the other rebuild's?
+            self.set_state(NexusState::Online);
+        } else {
+            error!(
+                "Rebuild task for child {} of nexus {} failed with state {:?}",
+                &task.destination, &self.name, task.state
+            );
+        }
+
+        Ok(())
+    }
+
+    pub async fn complete_rebuild(nexus: String, task: String) {
+        info!(
+            "nexus {} received complete_rebuild from task {}",
+            nexus, task
+        );
+
+        let nexus = nexus_lookup(&nexus).unwrap();
+        if let Err(e) = nexus.on_rebuild_complete(task).await {
+            error!("{}", e);
         }
     }
 
@@ -248,16 +444,16 @@ impl Nexus {
     /// Add a child to the configuration when an example callback is run.
     /// The nexus is not opened implicitly, call .open() for this manually.
     pub fn examine_child(&mut self, name: &str) -> bool {
-        for mut c in &mut self.children {
-            if c.name == name && c.state == ChildState::Init {
+        self.children
+            .iter_mut()
+            .filter(|c| c.state == ChildState::Init && c.name == name)
+            .any(|c| {
                 if let Some(bdev) = Bdev::lookup_by_name(name) {
-                    debug!("{}: Adding child {}", self.name, name);
                     c.bdev = Some(bdev);
                     return true;
                 }
-            }
-        }
-        false
+                false
+            })
     }
 
     /// try to open all the child devices
@@ -322,6 +518,10 @@ impl Nexus {
             .iter()
             .map(|s| {
                 if self.bdev.alignment() < *s {
+                    trace!(
+                        "{}: child has alignment {}, updating required_alignment from {}",
+                        self.name, *s, self.bdev.alignment()
+                    );
                     unsafe {
                         (*self.bdev.as_ptr()).required_alignment = *s;
                     }
@@ -331,38 +531,76 @@ impl Nexus {
         Ok(())
     }
 
-    /// read labels from the children devices, we fail the operation if:
-    ///
-    /// (1) a child does not have valid label
-    /// (2) if any label does not match the label of the first child
-
-    pub async fn update_child_labels(&mut self) -> Result<NexusLabel, Error> {
+    /// Read labels from all child devices
+    async fn get_child_labels(&self) -> Vec<NexusChildLabel<'_>> {
         let mut futures = Vec::new();
         self.children
-            .iter_mut()
-            .map(|child| futures.push(child.probe_label()))
+            .iter()
+            .map(|child| futures.push(child.get_label()))
             .for_each(drop);
+        join_all(futures).await
+    }
 
-        let (ok_res, mut err_res): (Vec<_>, Vec<_>) =
-            join_all(futures).await.into_iter().partition(Result::is_ok);
-        if let Some(Err(err)) = err_res.pop() {
-            // pick the first error
-            return Err(err).context(ReadLabel {
-                name: self.name.clone(),
-            });
+    /// Update labels of child devices as required:
+    /// (1) Update any child that does not have valid label.
+    /// (2) Upate all children with a new label if existing (valid) labels
+    ///     are not all identical.
+    ///
+    /// Return the resulting label.
+    pub async fn update_child_labels(
+        &mut self,
+    ) -> Result<NexusLabel, LabelError> {
+        // Get a list of all children and their labels
+        let list = self.get_child_labels().await;
+
+        // Search for first "valid" label
+        if let Some(target) = NexusChildLabel::find_target_label(&list) {
+            // Check that all "valid" labels are equal
+            if NexusChildLabel::compare_labels(&target, &list) {
+                let (_valid, invalid): (
+                    Vec<NexusChildLabel>,
+                    Vec<NexusChildLabel>,
+                ) = list.into_iter().partition(|label| {
+                    label.get_label_status() == NexusLabelStatus::Both
+                });
+
+                if invalid.is_empty() {
+                    info!(
+                        "{}: All child disk labels are valid and consistent",
+                        self.name
+                    );
+                } else {
+                    // Write out (only) those labels that require updating
+                    info!(
+                        "{}: Replacing missing/invalid child disk labels",
+                        self.name
+                    );
+                    self.write_labels(&target, &invalid).await?
+                }
+
+                // TODO: When the GUID does not match the given UUID.
+                // it means that the PVC has been recreated.
+                // We should consider also updating the labels in such a case.
+
+                info!("{}: existing label:\n{}", self.name, target);
+                return Ok(target);
+            }
+
+            info!("{}: Child disk labels do not match, writing new label to all children", self.name);
+        } else {
+            info!("{}: Child disk labels invalid or absent, writing new label to all children", self.name);
         }
 
-        let mut ret: Vec<NexusLabel> =
-            ok_res.into_iter().map(Result::unwrap).collect();
+        // Either there are no valid labels or there
+        // are some valid labels that do not agree.
+        // Generate a new label ...
+        let label = self.generate_label();
 
-        // verify that all labels are equal
-        if ret.iter().skip(1).any(|e| e != &ret[0]) {
-            return Err(Error::CheckLabels {
-                name: self.name.clone(),
-            });
-        }
+        // ... and write it out to ALL children.
+        self.write_all_labels(&label).await?;
 
-        Ok(ret.pop().unwrap())
+        info!("{}: new label:\n{}", self.name, label);
+        Ok(label)
     }
 
     /// The nexus is allowed to be smaller then the underlying child devices

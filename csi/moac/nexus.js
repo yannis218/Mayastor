@@ -4,10 +4,10 @@
 
 const _ = require('lodash');
 const assert = require('assert');
-const { GrpcCode, GrpcError } = require('./grpc_client');
+const { GrpcCode, GrpcError, mayastor } = require('./grpc_client');
 const log = require('./logger').Logger('nexus');
 
-function compareChildren(a, b) {
+function compareChildren (a, b) {
   assert(a.uri);
   assert(b.uri);
   if (a.uri > b.uri) return 1;
@@ -25,7 +25,7 @@ class Nexus {
   // @param {string}   props.state      State of the nexus.
   // @param {object[]} props.children   Replicas comprising the nexus (uri and state).
   //
-  constructor(props) {
+  constructor (props) {
     this.node = null; // set by registerNexus method on node
     this.uuid = props.uuid;
     this.size = props.size;
@@ -36,7 +36,7 @@ class Nexus {
   }
 
   // Stringify the nexus
-  toString() {
+  toString () {
     return this.uuid + '@' + (this.node ? this.node.name : 'nowhere');
   }
 
@@ -49,7 +49,7 @@ class Nexus {
   // @param {string}   props.state      State of the nexus.
   // @param {object[]} props.children   Replicas comprising the nexus (uri and state).
   //
-  merge(props) {
+  merge (props) {
     let changed = false;
 
     if (this.size != props.size) {
@@ -64,7 +64,7 @@ class Nexus {
       this.state = props.state;
       changed = true;
     }
-    let children = [].concat(props.children).sort(compareChildren);
+    const children = [].concat(props.children).sort(compareChildren);
     if (!_.isEqual(this.children, children)) {
       this.children = children;
       changed = true;
@@ -76,10 +76,10 @@ class Nexus {
 
   // When anything in nexus changes, this can be called to emit mod event
   // (a shortcut for frequently used code).
-  _emitMod() {
+  _emitMod () {
     this.node.emit('nexus', {
       eventType: 'mod',
-      object: this,
+      object: this
     });
   }
 
@@ -87,22 +87,22 @@ class Nexus {
   //
   // @param {object} node   Node to bind the nexus to.
   //
-  bind(node) {
+  bind (node) {
     this.node = node;
     log.info(`Adding nexus "${this}" to a list`);
     this.node.emit('nexus', {
       eventType: 'new',
-      object: this,
+      object: this
     });
   }
 
   // Unbind the previously bound nexus from the node.
-  unbind() {
+  unbind () {
     log.info(`Removing nexus "${this}" from a list`);
     this.node.unregisterNexus(this);
     this.node.emit('nexus', {
       eventType: 'del',
-      object: this,
+      object: this
     });
     this.node = null;
   }
@@ -110,7 +110,7 @@ class Nexus {
   // Set state of the nexus to offline.
   // This is typically called when mayastor stops running on the node and
   // the pool becomes inaccessible.
-  offline() {
+  offline () {
     log.warn(`Nexus "${this}" got offline`);
     this.state = 'OFFLINE';
     this.reason = `mayastor does not run on the node "${this.node.name}"`;
@@ -118,10 +118,10 @@ class Nexus {
   }
 
   // Publish the nexus to make accessible for IO.
-  //
+  // @params {string}   protocol      The nexus share protocol.
   // @returns {string} The device path of nexus block device.
   //
-  async publish() {
+  async publish (protocol) {
     var res;
 
     if (this.devicePath) {
@@ -130,12 +130,25 @@ class Nexus {
         `Nexus ${this} has been already published`
       );
     }
-    log.debug(`Publishing nexus "${this}" ...`);
 
+    const nexus_protocol = 'NEXUS_'.concat(protocol.toUpperCase());
+    var share = mayastor.ShareProtocolNexus.type.value.find(
+      (ent) => ent.name == nexus_protocol
+    );
+    if (!share) {
+      throw new GrpcError(
+        GrpcCode.NOT_FOUND,
+        `Cannot find protocol "${protocol}" for Nexus ${this}`
+      );
+    }
+    log.info(
+      `Publishing nexus "${this}" with protocol=${protocol}  share=${share}...`
+    );
     try {
       res = await this.node.call('publishNexus', {
         uuid: this.uuid,
         key: '',
+        share: share.number
       });
     } catch (err) {
       throw new GrpcError(
@@ -150,7 +163,7 @@ class Nexus {
   }
 
   // Unpublish nexus.
-  async unpublish() {
+  async unpublish () {
     log.debug(`Unpublishing nexus "${this}" ...`);
 
     try {
@@ -170,9 +183,9 @@ class Nexus {
   //
   // @param {object} replica   Replica object to add to the nexus.
   //
-  async addReplica(replica) {
-    let uri = replica.uri;
-    if (this.children.find(ch => ch.uri == uri)) {
+  async addReplica (replica) {
+    const uri = replica.uri;
+    if (this.children.find((ch) => ch.uri == uri)) {
       return;
     }
     log.debug(`Adding uri "${uri}" to nexus "${this}" ...`);
@@ -180,7 +193,7 @@ class Nexus {
     try {
       await this.node.call('addChildNexus', {
         uuid: this.uuid,
-        uri: uri,
+        uri: uri
       });
     } catch (err) {
       throw new GrpcError(
@@ -190,7 +203,7 @@ class Nexus {
     }
     this.children.push({
       uri: uri,
-      state: '', // will be filled later during a sync
+      state: '' // will be filled later during a sync
     });
     this.children.sort(compareChildren);
     this._emitMod();
@@ -200,9 +213,9 @@ class Nexus {
   //
   // @param {object} replica   Replica object to remove from the nexus.
   //
-  async removeReplica(replica) {
-    let uri = replica.uri;
-    if (!this.children.find(ch => ch.uri == uri)) {
+  async removeReplica (replica) {
+    const uri = replica.uri;
+    if (!this.children.find((ch) => ch.uri == uri)) {
       return;
     }
 
@@ -211,7 +224,7 @@ class Nexus {
     try {
       await this.node.call('removeChildNexus', {
         uuid: this.uuid,
-        uri: uri,
+        uri: uri
       });
     } catch (err) {
       throw new GrpcError(
@@ -220,7 +233,7 @@ class Nexus {
       );
     }
     // get index again in case the list changed in the meantime
-    let idx = this.children.findIndex(ch => ch.uri == uri);
+    const idx = this.children.findIndex((ch) => ch.uri == uri);
     if (idx >= 0) {
       this.children.splice(idx, 1);
     }
@@ -228,7 +241,7 @@ class Nexus {
   }
 
   // Destroy nexus on storage node.
-  async destroy() {
+  async destroy () {
     log.debug(`Destroying nexus "${this}" ...`);
 
     try {

@@ -20,7 +20,8 @@ const crdPool = yaml.safeLoad(
 // Pool operator tries to bring the real state of storage pools on mayastor
 // nodes in sync with mayastorpool custom resources in k8s.
 class PoolOperator {
-  constructor() {
+  constructor (namespace) {
+    this.namespace = namespace;
     this.k8sClient = null; // k8s client
     this.registry = null; // registry containing info about mayastor nodes
     this.eventStream = null; // A stream of node and pool events.
@@ -36,7 +37,7 @@ class PoolOperator {
   // @param {object} k8sClient   Client for k8s api server.
   // @param {object} registry    Registry with node and pool information.
   //
-  async init(k8sClient, registry) {
+  async init (k8sClient, registry) {
     log.info('Initializing pool operator');
 
     try {
@@ -54,8 +55,12 @@ class PoolOperator {
     this.registry = registry;
     this.watcher = new Watcher(
       'pool',
-      this.k8sClient.apis['openebs.io'].v1alpha1.mayastorpools,
-      this.k8sClient.apis['openebs.io'].v1alpha1.watch.mayastorpools,
+      this.k8sClient.apis['openebs.io'].v1alpha1.namespaces(
+        this.namespace
+      ).mayastorpools,
+      this.k8sClient.apis['openebs.io'].v1alpha1.watch.namespaces(
+        this.namespace
+      ).mayastorpools,
       this._filterMayastorPool
     );
   }
@@ -65,11 +70,11 @@ class PoolOperator {
   // @param   {object} msp   MayaStor pool custom resource.
   // @returns {object} Pool properties defining a pool.
   //
-  _filterMayastorPool(msp) {
-    let props = {
+  _filterMayastorPool (msp) {
+    const props = {
       name: msp.metadata.name,
       node: msp.spec.node,
-      disks: msp.spec.disks,
+      disks: msp.spec.disks
     };
     // sort the disks for easy string to string comparison
     props.disks.sort();
@@ -85,47 +90,46 @@ class PoolOperator {
   // The right order of steps is:
   //   1. Get pool resources
   //   2. Get info about pools on storage nodes
-  async start() {
+  async start () {
     var self = this;
 
     // get pool k8s resources for initial synchronization and install
     // event handlers to follow changes to them.
     await self.watcher.start();
     self._bindWatcher(self.watcher);
-    self.watcher.list().forEach(r => (self.resource[r.name] = r));
+    self.watcher.list().forEach((r) => (self.resource[r.name] = r));
 
     // this will start async processing of node and pool events
-    self.eventStream = new EventStream(self.registry);
-    self.eventStream.on('data', async ev => {
+    self.eventStream = new EventStream({ registry: self.registry });
+    self.eventStream.on('data', async (ev) => {
       if (ev.kind == 'pool') {
-        await self._onPoolEvent(ev.eventType, ev.object);
+        await self.workq.push(ev, self._onPoolEvent.bind(self));
       } else if (ev.kind == 'node' && ev.eventType == 'sync') {
-        await self._onNodeSyncEvent(ev.object.name);
+        await self.workq.push(ev.object.name, self._onNodeSyncEvent.bind(self));
       }
     });
   }
 
   // Handler for new/mod/del pool events
   //
-  // @param {string} eventType  Either new, mod or del.
-  // @param {object} pool       Pool object that the event relates to.
+  // @param {object} ev       Pool event as received from event stream.
   //
-  async _onPoolEvent(eventType, pool) {
-    let name = pool.name;
-    let resource = this.resource[name];
+  async _onPoolEvent (ev) {
+    const name = ev.object.name;
+    const resource = this.resource[name];
 
-    log.debug(`Received "${eventType}" event for pool "${name}"`);
+    log.debug(`Received "${ev.eventType}" event for pool "${name}"`);
 
-    if (eventType == 'new') {
+    if (ev.eventType == 'new') {
       if (!resource) {
         log.warn(`Unknown pool "${name}" will be destroyed`);
         await this._destroyPool(name);
       } else {
-        await this._updateResource(pool);
+        await this._updateResource(ev.object);
       }
-    } else if (eventType == 'mod') {
-      await this._updateResource(pool);
-    } else if (eventType == 'del' && resource) {
+    } else if (ev.eventType == 'mod') {
+      await this._updateResource(ev.object);
+    } else if (ev.eventType == 'del' && resource) {
       log.warn(`Recreating destroyed pool "${name}"`);
       await this._createPool(resource);
     }
@@ -138,11 +142,11 @@ class PoolOperator {
   //
   // @param {string} nodeName    Name of the new node.
   //
-  async _onNodeSyncEvent(nodeName) {
+  async _onNodeSyncEvent (nodeName) {
     log.debug(`Syncing pool records for node "${nodeName}"`);
 
-    let resources = Object.values(this.resource).filter(
-      ent => ent.node == nodeName
+    const resources = Object.values(this.resource).filter(
+      (ent) => ent.node == nodeName
     );
     for (let i = 0; i < resources.length; i++) {
       await this._createPool(resources[i]);
@@ -150,7 +154,7 @@ class PoolOperator {
   }
 
   // Stop the watcher, destroy event stream and reset resource cache.
-  async stop() {
+  async stop () {
     this.watcher.removeAllListeners();
     await this.watcher.stop();
     this.eventStream.destroy();
@@ -162,15 +166,15 @@ class PoolOperator {
   //
   // @param {object} watcher   k8s pool resource watcher.
   //
-  _bindWatcher(watcher) {
+  _bindWatcher (watcher) {
     var self = this;
-    watcher.on('new', resource => {
+    watcher.on('new', (resource) => {
       self.workq.push(resource, self._createPool.bind(self));
     });
-    watcher.on('mod', resource => {
+    watcher.on('mod', (resource) => {
       self.workq.push(resource, self._modifyPool.bind(self));
     });
-    watcher.on('del', resource => {
+    watcher.on('del', (resource) => {
       self.workq.push(resource.name, self._destroyPool.bind(self));
     });
   }
@@ -184,9 +188,9 @@ class PoolOperator {
   // @param {string}   resource.node  Node name for the pool.
   // @param {string[]} resource.disks Disks comprising the pool.
   //
-  async _createPool(resource) {
-    let name = resource.name;
-    let nodeName = resource.node;
+  async _createPool (resource) {
+    const name = resource.name;
+    const nodeName = resource.node;
     this.resource[name] = resource;
 
     let pool = this.registry.getPool(name);
@@ -198,35 +202,40 @@ class PoolOperator {
 
     if (
       !resource.disks.every(
-        ent => ent.startsWith('/dev/') && ent.indexOf('..') == -1
+        (ent) => ent.startsWith('/dev/') && ent.indexOf('..') == -1
       )
     ) {
-      let msg = 'Disk must be absolute path beginning with /dev';
+      const msg = 'Disk must be absolute path beginning with /dev';
       log.error(`Cannot create pool "${name}": ${msg}`);
-      await this._updateResourceProps(name, 'PENDING', msg);
+      await this._updateResourceProps(name, 'pending', msg);
       return;
     }
 
-    let node = this.registry.getNode(nodeName);
+    const node = this.registry.getNode(nodeName);
     if (!node) {
-      let msg = `mayastor does not run on node "${nodeName}"`;
+      const msg = `mayastor does not run on node "${nodeName}"`;
       log.error(`Cannot create pool "${name}": ${msg}`);
-      await this._updateResourceProps(name, 'PENDING', msg);
+      await this._updateResourceProps(name, 'pending', msg);
+      return;
+    }
+    if (!node.isSynced()) {
+      log.debug(
+        `The pool "${name}" will be synced when the node "${nodeName}" is synced`
+      );
       return;
     }
 
     // We will update the pool status once the pool is created, but
     // that can take a time, so set reasonable default now.
-    await this._updateResourceProps(name, 'PENDING', 'Creating the pool');
+    await this._updateResourceProps(name, 'pending', 'Creating the pool');
 
     try {
+      // pool resource props will be updated when "new" pool event is emitted
       pool = await node.createPool(name, resource.disks);
     } catch (err) {
       log.error(`Failed to create pool "${name}": ${err}`);
-      await this._updateResourceProps(name, 'PENDING', err.toString());
-      return;
+      await this._updateResourceProps(name, 'pending', err.toString());
     }
-    await this._updateResource(pool);
   }
 
   // Remove the pool from internal state and if it exists destroy it.
@@ -234,7 +243,7 @@ class PoolOperator {
   //
   // @param {string} name   Name of the pool to destroy.
   //
-  async _destroyPool(name) {
+  async _destroyPool (name) {
     var resource = this.resource[name];
     var pool = this.registry.getPool(name);
 
@@ -256,9 +265,9 @@ class PoolOperator {
   //
   // @param {string} newPool   New pool parameters.
   //
-  async _modifyPool(newProps) {
-    let name = newProps.name;
-    let curProps = this.resource[name];
+  async _modifyPool (newProps) {
+    const name = newProps.name;
+    const curProps = this.resource[name];
     if (!curProps) {
       log.warn(`Ignoring modification to unknown pool "${name}"`);
       return;
@@ -284,7 +293,7 @@ class PoolOperator {
   //
   // @param {object} pool      Pool object.
   //
-  async _updateResource(pool) {
+  async _updateResource (pool) {
     var name = pool.name;
     var resource = this.resource[name];
 
@@ -293,11 +302,16 @@ class PoolOperator {
       log.warn(`State of unknown pool "${name}" has changed`);
       return;
     }
+    var state = pool.state.replace(/^POOL_/, '').toLowerCase();
+    var reason = '';
+    if (state == 'offline') {
+      reason = `mayastor does not run on the node "${pool.node}"`;
+    }
 
     await this._updateResourceProps(
       name,
-      pool.state,
-      pool.reason,
+      state,
+      reason,
       pool.capacity,
       pool.used
     );
@@ -316,7 +330,7 @@ class PoolOperator {
   // @param {number} capacity  Capacity of the pool in bytes.
   // @param {number} used      Used bytes in the pool.
   //
-  async _updateResourceProps(name, state, reason, capacity, used) {
+  async _updateResourceProps (name, state, reason, capacity, used) {
     // For the update of CRD status we need a real k8s pool object, change the
     // status in it and store it back. Another reason for grabbing the latest
     // version of CRD from watcher cache (even if this.resource contains an older
@@ -331,7 +345,7 @@ class PoolOperator {
       );
       return;
     }
-    let status = k8sPool.status || {};
+    const status = k8sPool.status || {};
     // avoid the update if the object has not changed
     if (
       state == status.state &&
@@ -355,6 +369,7 @@ class PoolOperator {
 
     try {
       await this.k8sClient.apis['openebs.io'].v1alpha1
+        .namespaces(this.namespace)
         .mayastorpools(name)
         .status.put({ body: k8sPool });
     } catch (err) {

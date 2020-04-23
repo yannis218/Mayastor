@@ -13,7 +13,7 @@ const { GrpcCode, GrpcError } = require('../grpc_client');
 
 const UUID = 'ba5e39e9-0c0e-4973-8a3a-0dccada09cbb';
 
-module.exports = function() {
+module.exports = function () {
   var props = {
     uuid: UUID,
     size: 100,
@@ -22,24 +22,24 @@ module.exports = function() {
     children: [
       {
         uri: 'nvmf://' + UUID,
-        state: 'ONLINE',
+        state: 'ONLINE'
       },
       {
         uri: 'bdev:///' + UUID,
-        state: 'ONLINE',
-      },
-    ],
+        state: 'ONLINE'
+      }
+    ]
   };
 
-  it('should bind the nexus to node and then unbind it', done => {
-    let node = new Node('node');
-    let nexus = new Nexus(props);
-    node.once('nexus', ev => {
+  it('should bind the nexus to node and then unbind it', (done) => {
+    const node = new Node('node');
+    const nexus = new Nexus(props);
+    node.once('nexus', (ev) => {
       expect(ev.eventType).to.equal('new');
       expect(ev.object).to.equal(nexus);
       expect(nexus.node).to.equal(node);
 
-      node.once('nexus', ev => {
+      node.once('nexus', (ev) => {
         expect(ev.eventType).to.equal('del');
         expect(ev.object).to.equal(nexus);
         setTimeout(() => {
@@ -55,11 +55,11 @@ module.exports = function() {
   });
 
   it('should offline the nexus', () => {
-    let node = new Node('node');
-    let nexus = new Nexus(props);
+    const node = new Node('node');
+    const nexus = new Nexus(props);
     node._registerNexus(nexus);
 
-    node.once('nexus', ev => {
+    node.once('nexus', (ev) => {
       expect(ev.eventType).to.equal('mod');
       expect(ev.object).to.equal(nexus);
       expect(nexus.state).to.equal('OFFLINE');
@@ -86,11 +86,11 @@ module.exports = function() {
       sinon.assert.calledTwice(eventSpy);
       sinon.assert.calledWith(eventSpy.firstCall, 'nexus', {
         eventType: 'new',
-        object: nexus,
+        object: nexus
       });
       sinon.assert.calledWith(eventSpy.secondCall, 'nexus', {
         eventType: 'mod',
-        object: nexus,
+        object: nexus
       });
       expect(nexus.size).to.equal(1000);
     });
@@ -103,7 +103,7 @@ module.exports = function() {
       sinon.assert.calledTwice(eventSpy);
       sinon.assert.calledWith(eventSpy.secondCall, 'nexus', {
         eventType: 'mod',
-        object: nexus,
+        object: nexus
       });
       expect(nexus.devicePath).to.equal('/dev/nbd0');
     });
@@ -116,7 +116,7 @@ module.exports = function() {
       sinon.assert.calledTwice(eventSpy);
       sinon.assert.calledWith(eventSpy.secondCall, 'nexus', {
         eventType: 'mod',
-        object: nexus,
+        object: nexus
       });
       expect(nexus.state).to.equal('DEGRADED');
     });
@@ -125,8 +125,8 @@ module.exports = function() {
       newProps.children = [
         {
           uri: 'bdev:///' + UUID,
-          state: 'ONLINE',
-        },
+          state: 'ONLINE'
+        }
       ];
       nexus.merge(newProps);
 
@@ -134,7 +134,7 @@ module.exports = function() {
       sinon.assert.calledTwice(eventSpy);
       sinon.assert.calledWith(eventSpy.secondCall, 'nexus', {
         eventType: 'mod',
-        object: nexus,
+        object: nexus
       });
       expect(nexus.children).to.have.lengthOf(1);
       expect(nexus.children[0].uri).to.equal('bdev:///' + UUID);
@@ -145,12 +145,12 @@ module.exports = function() {
       newProps.children = [
         {
           uri: 'bdev:///' + UUID,
-          state: 'ONLINE',
+          state: 'ONLINE'
         },
         {
           uri: 'nvmf://' + UUID,
-          state: 'ONLINE',
-        },
+          state: 'ONLINE'
+        }
       ];
       nexus.merge(newProps);
 
@@ -158,7 +158,7 @@ module.exports = function() {
       sinon.assert.calledOnce(eventSpy);
       sinon.assert.calledWith(eventSpy, 'nexus', {
         eventType: 'new',
-        object: nexus,
+        object: nexus
       });
     });
   });
@@ -167,10 +167,10 @@ module.exports = function() {
     var node, nexus, eventSpy, callStub;
 
     // Create a sample nexus bound to a node
-    beforeEach(done => {
+    beforeEach((done) => {
       node = new Node('node');
       nexus = new Nexus(props);
-      node.once('nexus', ev => {
+      node.once('nexus', (ev) => {
         expect(ev.eventType).to.equal('new');
         eventSpy = sinon.spy(node, 'emit');
         callStub = sinon.stub(node, 'call');
@@ -184,21 +184,71 @@ module.exports = function() {
       callStub.reset();
     });
 
-    it('should publish the nexus', async () => {
-      callStub.resolves({ devicePath: '/dev/nbd0' });
+    it('should not publish the nexus with whatever protocol', async () => {
+      callStub.resolves({ devicePath: '/dev/whatever0' });
+      callStub.rejects(new GrpcError(GrpcCode.NOT_FOUND, 'Test failure'));
 
-      await nexus.publish();
+      await shouldFailWith(GrpcCode.NOT_FOUND, async () => {
+        await nexus.publish('whatever');
+      });
+
+      sinon.assert.notCalled(callStub);
+    });
+
+    it('should publish the nexus with iscsi protocol', async () => {
+      callStub.resolves({ devicePath: '/dev/iscsi' });
+
+      await nexus.publish('iscsi');
 
       sinon.assert.calledOnce(callStub);
       sinon.assert.calledWith(callStub, 'publishNexus', {
         uuid: UUID,
         key: '',
+        share: 2
+      });
+      expect(nexus.devicePath).to.equal('/dev/iscsi');
+      sinon.assert.calledOnce(eventSpy);
+      sinon.assert.calledWith(eventSpy, 'nexus', {
+        eventType: 'mod',
+        object: nexus
+      });
+    });
+
+    it('should publish the nexus with nvmf protocol', async () => {
+      callStub.resolves({ devicePath: '/dev/nvme0' });
+
+      await nexus.publish('nvmf');
+
+      sinon.assert.calledOnce(callStub);
+      sinon.assert.calledWith(callStub, 'publishNexus', {
+        uuid: UUID,
+        key: '',
+        share: 1
+      });
+      expect(nexus.devicePath).to.equal('/dev/nvme0');
+      sinon.assert.calledOnce(eventSpy);
+      sinon.assert.calledWith(eventSpy, 'nexus', {
+        eventType: 'mod',
+        object: nexus
+      });
+    });
+
+    it('should publish the nexus with nbd protocol', async () => {
+      callStub.resolves({ devicePath: '/dev/nbd0' });
+
+      await nexus.publish('nbd');
+
+      sinon.assert.calledOnce(callStub);
+      sinon.assert.calledWith(callStub, 'publishNexus', {
+        uuid: UUID,
+        key: '',
+        share: 0 // Nbd for now
       });
       expect(nexus.devicePath).to.equal('/dev/nbd0');
       sinon.assert.calledOnce(eventSpy);
       sinon.assert.calledWith(eventSpy, 'nexus', {
         eventType: 'mod',
-        object: nexus,
+        object: nexus
       });
     });
 
@@ -213,14 +263,14 @@ module.exports = function() {
       sinon.assert.calledOnce(eventSpy);
       sinon.assert.calledWith(eventSpy, 'nexus', {
         eventType: 'mod',
-        object: nexus,
+        object: nexus
       });
     });
 
     it('should add replica to nexus', async () => {
-      let replica = new Replica({
+      const replica = new Replica({
         uuid: UUID,
-        uri: 'iscsi://' + UUID,
+        uri: 'iscsi://' + UUID
       });
       callStub.resolves({});
 
@@ -229,7 +279,7 @@ module.exports = function() {
       sinon.assert.calledOnce(callStub);
       sinon.assert.calledWith(callStub, 'addChildNexus', {
         uuid: UUID,
-        uri: 'iscsi://' + UUID,
+        uri: 'iscsi://' + UUID
       });
       expect(nexus.children).to.have.lengthOf(3);
       // should be sorted according to uri
@@ -239,14 +289,14 @@ module.exports = function() {
       sinon.assert.calledOnce(eventSpy);
       sinon.assert.calledWith(eventSpy, 'nexus', {
         eventType: 'mod',
-        object: nexus,
+        object: nexus
       });
     });
 
     it('should not add replica to nexus if grpc fails', async () => {
-      let replica = new Replica({
+      const replica = new Replica({
         uuid: UUID,
-        uri: 'iscsi://' + UUID,
+        uri: 'iscsi://' + UUID
       });
       callStub.rejects(new GrpcError(GrpcCode.INTERNAL, 'Test failure'));
 
@@ -257,7 +307,7 @@ module.exports = function() {
       sinon.assert.calledOnce(callStub);
       sinon.assert.calledWith(callStub, 'addChildNexus', {
         uuid: UUID,
-        uri: 'iscsi://' + UUID,
+        uri: 'iscsi://' + UUID
       });
       expect(nexus.children).to.have.lengthOf(2);
       expect(nexus.children[0].uri).to.equal('bdev:///' + UUID);
@@ -266,9 +316,9 @@ module.exports = function() {
     });
 
     it('should remove replica from nexus', async () => {
-      let replica = new Replica({
+      const replica = new Replica({
         uuid: UUID,
-        uri: 'nvmf://' + UUID,
+        uri: 'nvmf://' + UUID
       });
       callStub.resolves({});
 
@@ -277,21 +327,21 @@ module.exports = function() {
       sinon.assert.calledOnce(callStub);
       sinon.assert.calledWith(callStub, 'removeChildNexus', {
         uuid: UUID,
-        uri: 'nvmf://' + UUID,
+        uri: 'nvmf://' + UUID
       });
       expect(nexus.children).to.have.lengthOf(1);
       expect(nexus.children[0].uri).to.equal('bdev:///' + UUID);
       sinon.assert.calledOnce(eventSpy);
       sinon.assert.calledWith(eventSpy, 'nexus', {
         eventType: 'mod',
-        object: nexus,
+        object: nexus
       });
     });
 
     it('should not remove replica from nexus if grpc fails', async () => {
-      let replica = new Replica({
+      const replica = new Replica({
         uuid: UUID,
-        uri: 'nvmf://' + UUID,
+        uri: 'nvmf://' + UUID
       });
       callStub.rejects(new GrpcError(GrpcCode.INTERNAL, 'Test failure'));
 
@@ -302,7 +352,7 @@ module.exports = function() {
       sinon.assert.calledOnce(callStub);
       sinon.assert.calledWith(callStub, 'removeChildNexus', {
         uuid: UUID,
-        uri: 'nvmf://' + UUID,
+        uri: 'nvmf://' + UUID
       });
       expect(nexus.children).to.have.lengthOf(2);
       expect(nexus.children[0].uri).to.equal('bdev:///' + UUID);
@@ -318,7 +368,7 @@ module.exports = function() {
       sinon.assert.calledOnce(eventSpy);
       sinon.assert.calledWith(eventSpy, 'nexus', {
         eventType: 'del',
-        object: nexus,
+        object: nexus
       });
       sinon.assert.calledOnce(callStub);
       sinon.assert.calledWith(callStub, 'destroyNexus', { uuid: UUID });
@@ -350,7 +400,7 @@ module.exports = function() {
       sinon.assert.calledOnce(eventSpy);
       sinon.assert.calledWith(eventSpy, 'nexus', {
         eventType: 'del',
-        object: nexus,
+        object: nexus
       });
       sinon.assert.calledOnce(callStub);
       sinon.assert.calledWith(callStub, 'destroyNexus', { uuid: UUID });

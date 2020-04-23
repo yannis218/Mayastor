@@ -8,17 +8,31 @@ const grpc_promise = require('grpc-promise');
 const protoLoader = require('@grpc/proto-loader');
 const log = require('./logger').Logger('grpc');
 
-const PROTO_PATH = __dirname + '/proto/mayastor_service.proto';
+const MAYASTOR_SVC_PROTO_PATH = __dirname + '/proto/mayastor_service.proto';
+const MAYASTOR_PROTO_PATH = __dirname + '/proto/mayastor_service.proto';
 
-// Load mayastor proto file with mayastor service
-const packageDefinition = protoLoader.loadSync(PROTO_PATH, {
+// Load mayastor service proto file with mayastor service
+const packageDefinitionSvc = protoLoader.loadSync(MAYASTOR_SVC_PROTO_PATH, {
   keepCase: false,
   longs: Number,
   enums: String,
   defaults: true,
-  oneofs: true,
+  oneofs: true
 });
-const mayastor = grpc.loadPackageDefinition(packageDefinition).mayastor_service;
+const mayastorSvc = grpc.loadPackageDefinition(packageDefinitionSvc)
+  .mayastor_service;
+
+// Load mayastor proto file with mayastor
+const packageDefinition = protoLoader.loadSync(MAYASTOR_PROTO_PATH, {
+  // this is to load google/descriptor.proto
+  includeDirs: ['./node_modules/protobufjs'],
+  keepCase: true,
+  longs: Number,
+  enums: String,
+  defaults: true,
+  oneofs: true
+});
+const mayastor = grpc.loadPackageDefinition(packageDefinition).mayastor;
 
 // Grpc error object.
 //
@@ -42,7 +56,7 @@ const mayastor = grpc.loadPackageDefinition(packageDefinition).mayastor_service;
 //   UNAUTHENTICATED: 16
 //
 class GrpcError extends Error {
-  constructor(code, msg) {
+  constructor (code, msg) {
     if (msg === undefined) {
       msg = code;
       code = grpc.status.UNKNOWN;
@@ -58,8 +72,8 @@ class GrpcClient {
   // Create promise-friendly grpc client handle.
   //
   // @param {string} endpoint   Host and port that mayastor server listens on.
-  constructor(endpoint) {
-    let handle = new mayastor.Mayastor(
+  constructor (endpoint) {
+    const handle = new mayastorSvc.Mayastor(
       endpoint,
       grpc.credentials.createInsecure()
     );
@@ -72,17 +86,17 @@ class GrpcClient {
   // @param {string} method   Name of the grpc method.
   // @param {object} args     Arguments of the grpc method.
   // @returns {*} Return value of the grpc method.
-  async call(method, args) {
+  async call (method, args) {
     log.trace(
       `Calling grpc method ${method} with arguments: ${JSON.stringify(args)}`
     );
-    let ret = await this.handle[method]().sendMessage(args);
+    const ret = await this.handle[method]().sendMessage(args);
     log.trace(`Grpc method ${method} returned: ${JSON.stringify(ret)}`);
     return ret;
   }
 
   // Close the grpc handle. The client should not be used after that.
-  close() {
+  close () {
     this.handle.close();
   }
 }
@@ -92,5 +106,6 @@ module.exports = {
   // for easy access to grpc codes
   GrpcCode: grpc.status,
   GrpcError,
-  mayastor,
+  mayastorSvc,
+  mayastor
 };

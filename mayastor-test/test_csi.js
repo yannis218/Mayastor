@@ -24,12 +24,13 @@ const protoLoader = require('@grpc/proto-loader');
 // possible only with grpc-uds.
 const grpc = require('grpc-uds');
 const common = require('./test_common');
+const enums = require('./grpc_enums');
 // Without requiring wtf module the ts hangs at the end. It seems that it is
 // waiting for sudo'd mayastor progress which has already exited!?
 const wtfnode = require('wtfnode');
 
 var csiSock = common.CSI_ENDPOINT;
-var endpoint = common.endpoint;
+var endpoint = common.grpc_endpoint;
 
 // One big malloc bdev which we put lvol store on.
 const CONFIG = `
@@ -49,7 +50,7 @@ const UUID5 = BASE_UUID + '4';
 // UUID not used by any volume
 const UNKNOWN_UUID = BASE_UUID + '9';
 
-function createCsiClient(service) {
+function createCsiClient (service) {
   const pkgDef = grpc.loadPackageDefinition(
     protoLoader.loadSync(
       path.join(__dirname, '..', 'csi', 'proto', 'csi.proto'),
@@ -60,16 +61,17 @@ function createCsiClient(service) {
         longs: String,
         enums: String,
         defaults: true,
-        oneofs: true,
+        oneofs: true
       }
     )
   );
   const proto = pkgDef.csi.v1;
+  console.log('Creating client for ', csiSock);
   return new proto[service](csiSock, grpc.credentials.createInsecure());
 }
 
-function cleanPublishDir(mountTarget, done) {
-  let proc = common.runAsRoot('umount', ['-f', mountTarget]);
+function cleanPublishDir (mountTarget, done) {
+  const proc = common.runAsRoot('umount', ['-f', mountTarget]);
   proc.once('close', (code, signal) => {
     try {
       fs.rmdirSync(mountTarget);
@@ -79,13 +81,13 @@ function cleanPublishDir(mountTarget, done) {
   });
 }
 
-function createPublishDir(mountTarget) {
+function createPublishDir (mountTarget) {
   fs.mkdirSync(mountTarget);
 }
 
 // Returns a callback which verifies that method ended with given grpc error.
-function shouldFailWith(code, done) {
-  return function(err, res) {
+function shouldFailWith (code, done) {
+  return function (err, res) {
     if (err) {
       assert.equal(err.code, code);
       done();
@@ -96,38 +98,39 @@ function shouldFailWith(code, done) {
 }
 
 // Get filesystem type for given mount point.
-function getFsType(mp) {
-  let lines = execSync('mount')
+function getFsType (mp) {
+  const lines = execSync('mount')
     .toString()
     .trim()
     .split('\n');
   for (let i = 0; i < lines.length; i++) {
-    let cols = lines[i].split(' ');
+    const cols = lines[i].split(' ');
     if (mp === cols[2]) {
       return cols[4];
     }
   }
 }
 
-describe('csi', function() {
+describe('csi', function () {
   this.timeout(10000); // for network tests we need long timeouts
 
   // Start mayastor and create the lvol configuration needed for testing.
   // NOTE: Don't use mayastor in setup - we test CSI interface and we don't want
   // to depend on correct function of mayastor iface in order to test CSI.
-  before(done => {
-    let identityClient = createCsiClient('Identity');
+  before((done) => {
+    const identityClient = createCsiClient('Identity');
+    const i = 0;
 
     common.startMayastor(CONFIG);
     common.startMayastorGrpc();
 
     async.series(
       [
-        next => {
-          common.waitFor(pingDone => {
+        (next) => {
+          common.waitFor((pingDone) => {
             // fix the perms now - we can't do that before because it takes
             // time to csi-agent to create it ..
-            common.fixSocketPerms(err => {
+            common.fixSocketPerms((err) => {
               if (err) {
                 return pingDone(err);
               }
@@ -144,18 +147,18 @@ describe('csi', function() {
             });
           }, next);
         },
-        next => {
+        (next) => {
           common.dumbCommand(
             'construct_lvol_store',
             { bdev_name: 'Malloc0', lvs_name: 'tpool' },
             next
           );
         },
-        next => {
+        (next) => {
           async.times(
             5,
-            function(n, next) {
-              let uuid = BASE_UUID + n;
+            function (n, next) {
+              const uuid = BASE_UUID + n;
               common.dumbCommand(
                 'create_replica',
                 {
@@ -163,7 +166,7 @@ describe('csi', function() {
                   pool: 'tpool',
                   thin: false,
                   size: 25 * 1024 * 1024,
-                  share: 0, // "NONE"
+                  share: 0 // "NONE"
                 },
                 next
               );
@@ -171,17 +174,17 @@ describe('csi', function() {
             next
           );
         },
-        next => {
+        (next) => {
           async.times(
             5,
-            function(n, next) {
-              let uuid = BASE_UUID + n;
+            function (n, next) {
+              const uuid = BASE_UUID + n;
               common.dumbCommand(
                 'create_nexus',
                 {
                   uuid: uuid,
                   size: 25 * 1024 * 1024,
-                  children: ['bdev:///' + BASE_UUID + n],
+                  children: ['bdev:///' + BASE_UUID + n]
                 },
                 next
               );
@@ -189,22 +192,26 @@ describe('csi', function() {
             next
           );
         },
-        next => {
+        (next) => {
           async.times(
             5,
-            function(n, next) {
-              let uuid = BASE_UUID + n;
+            function (n, next) {
+              const uuid = BASE_UUID + n;
               common.dumbCommand(
                 'publish_nexus',
-                { uuid: uuid, key: '' },
+                {
+                  uuid: uuid,
+                  key: '',
+                  share: enums.NEXUS_NBD
+                },
                 next
               );
             },
             next
           );
-        },
+        }
       ],
-      err => {
+      (err) => {
         identityClient.close();
         done(err);
       }
@@ -212,40 +219,40 @@ describe('csi', function() {
   });
 
   // stop mayastor server if it was started by us
-  after(done => {
+  after((done) => {
     async.series(
       [
-        next => {
+        (next) => {
           async.times(
             5,
-            function(n, next) {
-              let uuid = BASE_UUID + n;
+            function (n, next) {
+              const uuid = BASE_UUID + n;
               common.dumbCommand('unpublish_nexus', { uuid: uuid }, next);
             },
-            function(err, res) {
+            function (err, res) {
               next();
             }
           );
         },
-        next => {
+        (next) => {
           common.stopAll(next);
-        },
+        }
       ],
       done
     );
   });
 
-  describe('general', function() {
-    it('should start even if there is a stale csi socket file', done => {
+  describe('general', function () {
+    it('should start even if there is a stale csi socket file', (done) => {
       var client = createCsiClient('Identity');
 
       async.series(
         [
-          next => {
-            common.restartMayastorGrpc(pingDone => {
+          (next) => {
+            common.restartMayastorGrpc((pingDone) => {
               // fix the perms now - we can't do that before because it takes
               // time to csi-agent to create it ..
-              common.fixSocketPerms(err => {
+              common.fixSocketPerms((err) => {
                 if (err) {
                   return pingDone(err);
                 }
@@ -253,14 +260,14 @@ describe('csi', function() {
                 client.probe({}, pingDone);
               });
             }, next);
-          },
+          }
         ],
         done
       );
     });
   });
 
-  describe('identity', function() {
+  describe('identity', function () {
     var client;
 
     before(() => {
@@ -273,7 +280,7 @@ describe('csi', function() {
       }
     });
 
-    it('probe', done => {
+    it('probe', (done) => {
       client.probe({}, (err, res) => {
         if (err) return done(err);
         assert.equal(res.ready.value, true);
@@ -281,7 +288,7 @@ describe('csi', function() {
       });
     });
 
-    it('get plugin info', done => {
+    it('get plugin info', (done) => {
       client.getPluginInfo({}, (err, res) => {
         if (err) return done(err);
         // If you need to change values of any properties here,
@@ -293,7 +300,7 @@ describe('csi', function() {
       });
     });
 
-    it('get plugin capabilities', done => {
+    it('get plugin capabilities', (done) => {
       client.getPluginCapabilities({}, (err, res) => {
         if (err) return done(err);
         // If you need to change any capabilities here,
@@ -309,7 +316,7 @@ describe('csi', function() {
     });
   });
 
-  describe('node', function() {
+  describe('node', function () {
     var client;
 
     before(() => {
@@ -322,7 +329,7 @@ describe('csi', function() {
       }
     });
 
-    it('get info', done => {
+    it('get info', (done) => {
       client.nodeGetInfo({}, (err, res) => {
         if (err) return done(err);
         assert.equal(
@@ -339,7 +346,7 @@ describe('csi', function() {
       });
     });
 
-    it('get capabilities', done => {
+    it('get capabilities', (done) => {
       client.nodeGetCapabilities({}, (err, res) => {
         if (err) return done(err);
         assert.lengthOf(res.capabilities, 2);
@@ -351,31 +358,31 @@ describe('csi', function() {
     });
   });
 
-  describe('stage and unstage xfs volume', function() {
+  describe('stage and unstage xfs volume', function () {
     var client;
     var mountTarget = '/tmp/target0';
 
     // get default args for stage op with xfs fs
-    function getDefaultArgs() {
+    function getDefaultArgs () {
       return {
         volume_id: UUID1,
         publish_context: {},
         staging_target_path: mountTarget,
         volume_capability: {
           access_mode: {
-            mode: 'MULTI_NODE_READER_ONLY',
+            mode: 'MULTI_NODE_READER_ONLY'
           },
           mount: {
-            fs_type: 'xfs',
-          },
+            fs_type: 'xfs'
+          }
         },
         readonly: false,
         secrets: {},
-        volume_context: {},
+        volume_context: {}
       };
     }
 
-    before(done => {
+    before((done) => {
       client = createCsiClient('Node');
       cleanPublishDir(mountTarget, () => {
         createPublishDir(mountTarget);
@@ -383,26 +390,26 @@ describe('csi', function() {
       });
     });
 
-    after(done => {
+    after((done) => {
       if (client != null) {
         client.close();
       }
       cleanPublishDir(mountTarget, done);
     });
 
-    it('should be able to stage volume', done => {
-      client.nodeStageVolume(getDefaultArgs(), err => {
+    it('should be able to stage volume', (done) => {
+      client.nodeStageVolume(getDefaultArgs(), (err) => {
         if (err) return done(err);
         assert.equal(getFsType(mountTarget), 'xfs');
         done();
       });
     });
 
-    it('get volume stats', done => {
+    it('get volume stats', (done) => {
       client.nodeGetVolumeStats(
         {
           volume_id: UUID1,
-          volume_path: mountTarget,
+          volume_path: mountTarget
         },
         (err, res) => {
           if (err) return done(err);
@@ -411,26 +418,26 @@ describe('csi', function() {
           // 25MB size of the bdev - something for the metadata
           assert.equal(res.usage[0].total, 24092672);
           // TODO: These are not available yet:
-          //assert.equal(res.usage[0].available, 1);
-          //assert.equal(res.usage[0].used, 0);
+          // assert.equal(res.usage[0].available, 1);
+          // assert.equal(res.usage[0].used, 0);
           done();
         }
       );
     });
 
-    it('staging the same volume again should return ok (idempotent)', done => {
+    it('staging the same volume again should return ok (idempotent)', (done) => {
       client.nodeStageVolume(getDefaultArgs(), done);
     });
 
-    it('staging a volume with a non existing bdev should fail with Internal Error', done => {
-      let args = getDefaultArgs();
+    it('staging a volume with a non existing bdev should fail with Internal Error', (done) => {
+      const args = getDefaultArgs();
       args.volume_id = UNKNOWN_UUID;
 
       client.nodeStageVolume(args, shouldFailWith(grpc.status.NOT_FOUND, done));
     });
 
-    it('staging a volume with the same staging path but with a different bdev should fail', done => {
-      let args = getDefaultArgs();
+    it('staging a volume with the same staging path but with a different bdev should fail', (done) => {
+      const args = getDefaultArgs();
       args.volume_id = UUID2;
 
       client.nodeStageVolume(
@@ -439,8 +446,8 @@ describe('csi', function() {
       );
     });
 
-    it('should fail to stage a volume with the bdev using a different target path', done => {
-      let args = getDefaultArgs();
+    it('should fail to stage a volume with the bdev using a different target path', (done) => {
+      const args = getDefaultArgs();
       args.staging_target_path = '/tmp/hello_world';
       client.nodeStageVolume(
         args,
@@ -448,18 +455,18 @@ describe('csi', function() {
       );
     });
 
-    it('should not unstage a volume with an unknown volumeid and return NOTFOUND error', done => {
+    it('should not unstage a volume with an unknown volumeid and return NOTFOUND error', (done) => {
       client.nodeUnstageVolume(
         {
           volume_id: 'illegal',
-          staging_target_path: mountTarget,
+          staging_target_path: mountTarget
         },
         shouldFailWith(grpc.status.NOT_FOUND, done)
       );
     });
 
-    it('should fail to stage a volume with a missing volume ID', done => {
-      let args = getDefaultArgs();
+    it('should fail to stage a volume with a missing volume ID', (done) => {
+      const args = getDefaultArgs();
       delete args.volume_id;
       client.nodeStageVolume(
         args,
@@ -467,8 +474,8 @@ describe('csi', function() {
       );
     });
 
-    it('should fail to stage a volume with a missing stage target path', done => {
-      let args = getDefaultArgs();
+    it('should fail to stage a volume with a missing stage target path', (done) => {
+      const args = getDefaultArgs();
       delete args.staging_target_path;
       client.nodeStageVolume(
         args,
@@ -476,8 +483,8 @@ describe('csi', function() {
       );
     });
 
-    it('should fail to stage a volume with missing access type', done => {
-      let args = getDefaultArgs();
+    it('should fail to stage a volume with missing access type', (done) => {
+      const args = getDefaultArgs();
       delete args.volume_capability.mount;
       client.nodeStageVolume(
         args,
@@ -485,8 +492,8 @@ describe('csi', function() {
       );
     });
 
-    it('should fail to stage a volume with missing access mode', done => {
-      let args = getDefaultArgs();
+    it('should fail to stage a volume with missing access mode', (done) => {
+      const args = getDefaultArgs();
       args.volume_capability.access_mode = {};
       client.nodeStageVolume(
         args,
@@ -494,8 +501,8 @@ describe('csi', function() {
       );
     });
 
-    it('should fail to stage a volume with missing volume_capability section', done => {
-      let args = getDefaultArgs();
+    it('should fail to stage a volume with missing volume_capability section', (done) => {
+      const args = getDefaultArgs();
       delete args.volume_capability;
       client.nodeStageVolume(
         args,
@@ -503,13 +510,13 @@ describe('csi', function() {
       );
     });
 
-    it('should be able to unstage volume', done => {
+    it('should be able to unstage volume', (done) => {
       client.nodeUnstageVolume(
         {
           volume_id: UUID1,
-          staging_target_path: mountTarget,
+          staging_target_path: mountTarget
         },
-        err => {
+        (err) => {
           if (err) return done(err);
           assert.isUndefined(getFsType(mountTarget));
           done();
@@ -518,14 +525,14 @@ describe('csi', function() {
     });
   });
 
-  describe('stage and unstage ext4 volume', function() {
+  describe('stage and unstage ext4 volume', function () {
     var client;
     var mountTarget = '/tmp/target1';
 
     // get default args for stage op with xfs fs
-    function getDefaultArgs() {}
+    function getDefaultArgs () {}
 
-    before(done => {
+    before((done) => {
       client = createCsiClient('Node');
       cleanPublishDir(mountTarget, () => {
         createPublishDir(mountTarget);
@@ -533,14 +540,14 @@ describe('csi', function() {
       });
     });
 
-    after(done => {
+    after((done) => {
       if (client != null) {
         client.close();
       }
       cleanPublishDir(mountTarget, done);
     });
 
-    it('should be able to stage volume', done => {
+    it('should be able to stage volume', (done) => {
       client.nodeStageVolume(
         {
           volume_id: UUID2,
@@ -548,17 +555,17 @@ describe('csi', function() {
           staging_target_path: mountTarget,
           volume_capability: {
             access_mode: {
-              mode: 'MULTI_NODE_READER_ONLY',
+              mode: 'MULTI_NODE_READER_ONLY'
             },
             mount: {
-              fs_type: 'ext4',
-            },
+              fs_type: 'ext4'
+            }
           },
           readonly: false,
           secrets: {},
-          volume_context: {},
+          volume_context: {}
         },
-        err => {
+        (err) => {
           if (err) return done(err);
           assert.equal(getFsType(mountTarget), 'ext4');
           done();
@@ -566,13 +573,13 @@ describe('csi', function() {
       );
     });
 
-    it('should be able to unstage volume', done => {
+    it('should be able to unstage volume', (done) => {
       client.nodeUnstageVolume(
         {
           volume_id: UUID2,
-          staging_target_path: mountTarget,
+          staging_target_path: mountTarget
         },
-        err => {
+        (err) => {
           if (err) return done(err);
           assert.isUndefined(getFsType(mountTarget));
           done();
@@ -581,11 +588,11 @@ describe('csi', function() {
     });
   });
 
-  describe('stage misc', function() {
+  describe('stage misc', function () {
     var client;
     var mountTarget = '/tmp/target2';
 
-    before(done => {
+    before((done) => {
       client = createCsiClient('Node');
       cleanPublishDir(mountTarget, () => {
         createPublishDir(mountTarget);
@@ -593,25 +600,25 @@ describe('csi', function() {
       });
     });
 
-    after(done => {
+    after((done) => {
       if (client != null) {
         client.close();
       }
       cleanPublishDir(mountTarget, done);
     });
 
-    it('should fail to stage unsupported fs', done => {
-      let args = {
+    it('should fail to stage unsupported fs', (done) => {
+      const args = {
         volume_id: UUID3,
         staging_target_path: mountTarget,
         volume_capability: {
           access_mode: {
-            mode: 'MULTI_NODE_READER_ONLY',
+            mode: 'MULTI_NODE_READER_ONLY'
           },
           mount: {
-            fs_type: 'ext3',
-          },
-        },
+            fs_type: 'ext3'
+          }
+        }
       };
       client.nodeStageVolume(
         args,
@@ -622,7 +629,7 @@ describe('csi', function() {
 
   // The combinations of ro/rw and access mode flags are quite confusing.
   // See the source code for more info on how this should work.
-  describe('publish and unpublish', function() {
+  describe('publish and unpublish', function () {
     var client;
 
     before(() => {
@@ -635,27 +642,27 @@ describe('csi', function() {
       }
     });
 
-    describe('MULTI_NODE_READER_ONLY staged volume', function() {
+    describe('MULTI_NODE_READER_ONLY staged volume', function () {
       var mountTarget = '/tmp/target3';
       var bindTarget1 = '/tmp/bind1';
       var bindTarget2 = '/tmp/bind2';
 
-      before(done => {
-        let stageArgs = {
+      before((done) => {
+        const stageArgs = {
           volume_id: UUID4,
           publish_context: {},
           staging_target_path: mountTarget,
           volume_capability: {
             access_mode: {
-              mode: 'MULTI_NODE_READER_ONLY',
+              mode: 'MULTI_NODE_READER_ONLY'
             },
             mount: {
-              fs_type: 'xfs',
-            },
+              fs_type: 'xfs'
+            }
           },
           readonly: false,
           secrets: {},
-          volume_context: {},
+          volume_context: {}
         };
 
         cleanPublishDir(mountTarget, () => {
@@ -664,49 +671,49 @@ describe('csi', function() {
         });
       });
 
-      after(done => {
+      after((done) => {
         async.series(
           [
-            next => {
+            (next) => {
               client.nodeUnstageVolume(
                 {
                   volume_id: UUID4,
-                  staging_target_path: mountTarget,
+                  staging_target_path: mountTarget
                 },
                 next
               );
             },
-            next => {
+            (next) => {
               cleanPublishDir(mountTarget, next);
             },
-            next => {
+            (next) => {
               cleanPublishDir(bindTarget1, next);
             },
-            next => {
+            (next) => {
               cleanPublishDir(bindTarget2, next);
-            },
+            }
           ],
           done
         );
       });
 
-      it('should publish a volume in ro mode and test it is idempotent op', done => {
-        let args = {
+      it('should publish a volume in ro mode and test it is idempotent op', (done) => {
+        const args = {
           volume_id: UUID4,
           staging_target_path: mountTarget,
           target_path: bindTarget1,
           volume_capability: {
             access_mode: {
-              mode: 'MULTI_NODE_READER_ONLY',
+              mode: 'MULTI_NODE_READER_ONLY'
             },
             mount: {
-              fs_type: 'xfs',
-            },
+              fs_type: 'xfs'
+            }
           },
-          readonly: true,
+          readonly: true
         };
 
-        client.nodePublishVolume(args, err => {
+        client.nodePublishVolume(args, (err) => {
           if (err) return done(err);
           assert.equal(getFsType(bindTarget1), 'xfs');
           // re-publish should succeed (idempotent)
@@ -714,19 +721,19 @@ describe('csi', function() {
         });
       });
 
-      it('should fail when re-publishing with a different staging path', done => {
-        let args = {
+      it('should fail when re-publishing with a different staging path', (done) => {
+        const args = {
           volume_id: UUID4,
           staging_target_path: '/invalid_staging_path',
           target_path: bindTarget1,
           volume_capability: {
             access_mode: {
-              mode: 'MULTI_NODE_READER_ONLY',
+              mode: 'MULTI_NODE_READER_ONLY'
             },
             mount: {
-              fs_type: 'xfs',
-            },
-          },
+              fs_type: 'xfs'
+            }
+          }
         };
 
         client.nodePublishVolume(
@@ -735,18 +742,18 @@ describe('csi', function() {
         );
       });
 
-      it('should fail with a missing target path', done => {
-        let args = {
+      it('should fail with a missing target path', (done) => {
+        const args = {
           volume_id: UUID4,
           staging_target_path: mountTarget,
           volume_capability: {
             access_mode: {
-              mode: 'MULTI_NODE_READER_ONLY',
+              mode: 'MULTI_NODE_READER_ONLY'
             },
             mount: {
-              fs_type: 'xfs',
-            },
-          },
+              fs_type: 'xfs'
+            }
+          }
         };
 
         client.nodePublishVolume(
@@ -755,26 +762,26 @@ describe('csi', function() {
         );
       });
 
-      it('should fail to publish the volume as rw', done => {
-        let args = {
+      it('should fail to publish the volume as rw', (done) => {
+        const args = {
           volume_id: UUID4,
           staging_target_path: mountTarget,
           target_path: bindTarget2,
           volume_capability: {
             access_mode: {
-              mode: 'MULTI_NODE_READER_ONLY',
+              mode: 'MULTI_NODE_READER_ONLY'
             },
             mount: {
               fs_type: 'xfs',
-              mnt_flags: [],
-            },
+              mnt_flags: []
+            }
           },
-          readonly: false,
+          readonly: false
         };
 
         client.nodePublishVolume(
           args,
-          shouldFailWith(grpc.status.INVALID_ARGUMENT, err => {
+          shouldFailWith(grpc.status.INVALID_ARGUMENT, (err) => {
             if (err) return done(err);
             assert.isUndefined(getFsType(bindTarget2));
             done();
@@ -782,13 +789,13 @@ describe('csi', function() {
         );
       });
 
-      it('should be able to unpublish ro volume', done => {
+      it('should be able to unpublish ro volume', (done) => {
         client.nodeUnpublishVolume(
           {
             volume_id: UUID4,
-            target_path: bindTarget2,
+            target_path: bindTarget2
           },
-          err => {
+          (err) => {
             if (err) return done(err);
             assert.isUndefined(getFsType(bindTarget2));
             done();
@@ -796,42 +803,42 @@ describe('csi', function() {
         );
       });
 
-      it('should be able to unpublish rw volume', done => {
+      it('should be able to unpublish rw volume', (done) => {
         client.nodeUnpublishVolume(
           {
             volume_id: UUID4,
-            target_path: bindTarget1,
+            target_path: bindTarget1
           },
-          err => {
+          (err) => {
             if (err) return done(err);
             // we cannot assert because the fs is lazily unmounted
-            //assert.isUndefined(getFsType(bindTarget1));
+            // assert.isUndefined(getFsType(bindTarget1));
             done();
           }
         );
       });
     });
 
-    describe('MULTI_NODE_SINGLE_WRITER staged volume', function() {
+    describe('MULTI_NODE_SINGLE_WRITER staged volume', function () {
       var mountTarget = '/tmp/target4';
       var bindTarget1 = '/tmp/bind1';
       var bindTarget2 = '/tmp/bind2';
 
-      before(done => {
-        let stageArgs = {
+      before((done) => {
+        const stageArgs = {
           volume_id: UUID5,
           publish_context: {},
           staging_target_path: mountTarget,
           volume_capability: {
             access_mode: {
-              mode: 'MULTI_NODE_SINGLE_WRITER',
+              mode: 'MULTI_NODE_SINGLE_WRITER'
             },
             mount: {
-              fs_type: 'ext4',
-            },
+              fs_type: 'ext4'
+            }
           },
           secrets: {},
-          volume_context: {},
+          volume_context: {}
         };
 
         cleanPublishDir(mountTarget, () => {
@@ -840,50 +847,50 @@ describe('csi', function() {
         });
       });
 
-      after(done => {
+      after((done) => {
         async.series(
           [
-            next => {
+            (next) => {
               client.nodeUnstageVolume(
                 {
                   volume_id: UUID5,
-                  staging_target_path: mountTarget,
+                  staging_target_path: mountTarget
                 },
                 next
               );
             },
-            next => {
+            (next) => {
               cleanPublishDir(mountTarget, next);
             },
-            next => {
+            (next) => {
               cleanPublishDir(bindTarget1, next);
             },
-            next => {
+            (next) => {
               cleanPublishDir(bindTarget2, next);
-            },
+            }
           ],
           done
         );
       });
 
-      it('should publish ro volume', done => {
-        let args = {
+      it('should publish ro volume', (done) => {
+        const args = {
           volume_id: UUID5,
           staging_target_path: mountTarget,
           target_path: bindTarget1,
           readonly: true,
           volume_capability: {
             access_mode: {
-              mode: 'MULTI_NODE_SINGLE_WRITER',
+              mode: 'MULTI_NODE_SINGLE_WRITER'
             },
             mount: {
               fs_type: 'ext4',
-              mnt_flags: ['ro'],
-            },
-          },
+              mnt_flags: ['ro']
+            }
+          }
         };
 
-        client.nodePublishVolume(args, err => {
+        client.nodePublishVolume(args, (err) => {
           if (err) return done(err);
           assert.equal(getFsType(bindTarget1), 'ext4');
           // re-publish should succeed (idempotent)
@@ -891,50 +898,50 @@ describe('csi', function() {
         });
       });
 
-      it('should publish rw volume', done => {
-        let args = {
+      it('should publish rw volume', (done) => {
+        const args = {
           volume_id: UUID5,
           staging_target_path: mountTarget,
           target_path: bindTarget2,
           volume_capability: {
             access_mode: {
-              mode: 'MULTI_NODE_SINGLE_WRITER',
+              mode: 'MULTI_NODE_SINGLE_WRITER'
             },
             mount: {
-              fs_type: 'ext4',
-            },
-          },
+              fs_type: 'ext4'
+            }
+          }
         };
 
-        client.nodePublishVolume(args, err => {
+        client.nodePublishVolume(args, (err) => {
           if (err) return done(err);
           assert.equal(getFsType(bindTarget2), 'ext4');
           done();
         });
       });
 
-      it('should be able to unpublish ro volume', done => {
+      it('should be able to unpublish ro volume', (done) => {
         client.nodeUnpublishVolume(
           {
             volume_id: UUID5,
-            target_path: bindTarget1,
+            target_path: bindTarget1
           },
-          err => {
+          (err) => {
             if (err) return done(err);
             // we cannot assert because the fs is lazily unmounted
-            //assert.isUndefined(getFsType(bindTarget1));
+            // assert.isUndefined(getFsType(bindTarget1));
             done();
           }
         );
       });
 
-      it('should be able to unpublish rw volume', done => {
+      it('should be able to unpublish rw volume', (done) => {
         client.nodeUnpublishVolume(
           {
             volume_id: UUID5,
-            target_path: bindTarget2,
+            target_path: bindTarget2
           },
-          err => {
+          (err) => {
             if (err) return done(err);
             assert.isUndefined(getFsType(bindTarget2));
             done();

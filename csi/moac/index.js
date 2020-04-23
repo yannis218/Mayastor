@@ -5,73 +5,89 @@
 
 'use strict';
 
-const { config, Client } = require('kubernetes-client');
+const { Client, KubeConfig } = require('kubernetes-client');
+const Request = require('kubernetes-client/backends/request');
 const yargs = require('yargs');
 const logger = require('./logger');
 const Registry = require('./registry');
 const NodeOperator = require('./node_operator');
 const PoolOperator = require('./pool_operator');
 const Volumes = require('./volumes');
+const VolumeOperator = require('./volume_operator');
 const ApiServer = require('./rest_api');
 const CsiServer = require('./csi').CsiServer;
 
 const log = new logger.Logger();
 
 // Read k8s client configuration, in order to be able to connect to k8s api
-// server, either from a file or from environment.
-function readK8sConfig(kubeconfig) {
+// server, either from a file or from environment and return k8s client
+// object.
+//
+// @param   {string} [kubefile]    Kube config file.
+// @returns {object}  k8s client object.
+function createK8sClient (kubefile) {
+  var backend;
   try {
-    if (kubeconfig != null) {
-      log.info('Reading k8s configuration from file ' + kubeconfig);
-      return config.fromKubeconfig(kubeconfig);
-    } else {
-      return config.getInCluster();
+    if (kubefile != null) {
+      log.info('Reading k8s configuration from file ' + kubefile);
+      const kubeconfig = new KubeConfig();
+      kubeconfig.loadFromFile(kubefile);
+      backend = new Request({ kubeconfig });
     }
+    return new Client({ backend });
   } catch (e) {
     log.error('Cannot get k8s client configuration: ' + e);
     process.exit(1);
   }
 }
 
-async function main() {
+async function main () {
+  var client;
   var registry;
   var volumes;
   var poolOper;
+  var volumeOper;
   var nodeOper;
   var csiServer;
   var apiServer;
 
-  let opts = yargs
+  const opts = yargs
     .options({
       a: {
         alias: 'csi-address',
         describe: 'Socket path where to listen for incoming CSI requests',
         default: '/var/tmp/csi.sock',
-        string: true,
+        string: true
       },
       k: {
         alias: 'kubeconfig',
         describe: 'Path to kubeconfig file',
-        string: true,
+        string: true
+      },
+      n: {
+        alias: 'namespace',
+        describe: 'Namespace of mayastor custom resources',
+        default: 'default',
+        string: true
       },
       p: {
         alias: 'port',
         describe: 'Port the REST API server should listen on',
         default: 3000,
-        number: true,
+        number: true
       },
       s: {
         alias: 'skip-k8s',
         describe:
           'Skip k8s client and k8s operators initialization (only for debug purpose)',
         default: false,
-        boolean: true,
+        boolean: true
       },
       v: {
         alias: 'verbose',
         describe: 'Print debug log messages',
-        count: true,
-      },
+        count: true
+      }
     })
     .help('help')
     .strict().argv;
@@ -89,9 +105,12 @@ async function main() {
   }
 
   // We must install signal handlers before grpc lib does it.
-  async function cleanUp() {
+  async function cleanUp () {
     if (csiServer) csiServer.undoReady();
     if (apiServer) apiServer.stop();
+    if (!opts.s) {
+      if (volumeOper) await volumeOper.stop();
+    }
     if (volumes) volumes.stop();
     if (!opts.s) {
       if (poolOper) await poolOper.stop();
@@ -118,8 +137,7 @@ async function main() {
 
   if (!opts.s) {
     // Create k8s client and load openAPI spec from k8s api server
-    let k8sConfig = readK8sConfig(opts.kubeconfig);
-    let client = new Client({ config: k8sConfig });
+    client = createK8sClient(opts.kubeconfig);
     log.debug('Loading openAPI spec from the server');
     await client.loadSpec();
 
@@ -128,7 +146,7 @@ async function main() {
     await nodeOper.init(client, registry);
     await nodeOper.start();
 
-    poolOper = new PoolOperator();
+    poolOper = new PoolOperator(opts.namespace);
     await poolOper.init(client, registry);
     await poolOper.start();
   }
@@ -136,11 +154,17 @@ async function main() {
   volumes = new Volumes(registry);
   volumes.start();
 
+  if (!opts.s) {
+    volumeOper = new VolumeOperator(opts.namespace);
+    await volumeOper.init(client, volumes);
+    await volumeOper.start();
+  }
+
   apiServer = new ApiServer(registry);
   await apiServer.start(opts.port);
 
   csiServer.makeReady(registry, volumes);
-  log.info('MOAC is up and ready 🚀');
+  log.info('MOAC is up and ready to 🚀');
 }
 
 main();

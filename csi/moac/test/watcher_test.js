@@ -36,26 +36,26 @@ const Readable = require('stream').Readable;
 //        ...
 //    }
 //  }
-function createObject(name, generation, val) {
+function createObject (name, generation, val) {
   return {
     kind: 'mykind',
     apiVersion: 'my.group.io/v1alpha1',
     metadata: { name, generation },
-    spec: { val },
+    spec: { val }
   };
 }
 
 // Simple filter that produces objects {name, val} from the objects
 // created by the createObject() above and only objects with val > 100
 // pass through the filter.
-function objectFilter(k8sObject) {
+function objectFilter (k8sObject) {
   if (k8sObject.kind != 'mykind') {
     return null;
   }
   if (k8sObject.spec.val > 100) {
     return {
       name: k8sObject.metadata.name,
-      val: k8sObject.spec.val,
+      val: k8sObject.spec.val
     };
   } else {
     return null;
@@ -65,30 +65,30 @@ function objectFilter(k8sObject) {
 // A stub for GET k8s API request returning a collection of k8s objects which
 // were previously set by add() method.
 class GetMock {
-  constructor(delay) {
+  constructor (delay) {
     this.delay = delay;
     this.objects = {};
   }
 
-  add(obj) {
+  add (obj) {
     this.objects[obj.metadata.name] = obj;
   }
 
-  remove(name) {
+  remove (name) {
     delete this.objects[name];
   }
 
-  reset() {
+  reset () {
     this.objects = {};
   }
 
-  get() {
+  get () {
     var self = this;
     return new Promise((resolve, reject) => {
       setTimeout(() => {
         resolve({
           statusCode: 200,
-          body: { items: Object.values(self.objects) },
+          body: { items: Object.values(self.objects) }
         });
       }, self.delay || 0);
     });
@@ -96,7 +96,7 @@ class GetMock {
 }
 
 // A mock representing k8s watch stream.
-// You can feed arbitrary strings to it and it will pass them to a consumer.
+// You can feed arbitrary objects to it and it will pass them to a consumer.
 // Example of k8s watch stream event follows:
 //
 // {
@@ -104,72 +104,72 @@ class GetMock {
 //  "object": {
 //     ... (object as shown in GetMock example above)
 //  }
-//}
-//
-// NOTE: The event objects must be each on its own line. That's how k8s does
-// it. Event parser breaks otherwise!
+// }
 class StreamMock extends Readable {
-  constructor() {
-    super({ autoDestroy: true });
+  constructor () {
+    super({ autoDestroy: true, objectMode: true });
     this.feeds = [];
     this.wantMore = false;
   }
 
-  _read(size) {
+  _read (size) {
     while (true) {
-      let chunk = this.feeds.shift();
-      if (chunk === undefined) {
+      const obj = this.feeds.shift();
+      if (obj === undefined) {
         this.wantMore = true;
         break;
       }
-      this.push(chunk);
+      this.push(obj);
     }
   }
 
-  feedRaw(str) {
-    this.feeds.push(str);
+  feed (type, object) {
+    this.feeds.push({
+      type,
+      object
+    });
     if (this.wantMore) {
       this.wantMore = false;
       this._read();
     }
   }
 
-  feed(type, object) {
-    this.feedRaw(JSON.stringify({ type, object }) + '\n');
+  end () {
+    this.feeds.push(null);
+    if (this.wantMore) {
+      this.wantMore = false;
+      this._read();
+    }
   }
 
-  end() {
-    this.feedRaw(null);
-  }
-
-  getStream() {
+  getObjectStream () {
     return this;
   }
 }
 
 // This is for test cases where we need to test disconnected watch stream.
 // In that case, the watcher will create a new instance of watch stream
-// (by calling getStream) and we need to keep track of latest created stream
+// (by calling getObjectStream) and we need to keep track of latest created stream
 // in order to be able to feed data to it etc.
 class StreamMockTracker {
-  constructor() {
+  constructor () {
     this.current = null;
   }
 
   // create a new stream (mimics nodejs k8s client api)
-  getStream() {
-    let s = new StreamMock();
+  getObjectStream () {
+    const s = new StreamMock();
     this.current = s;
     return s;
   }
 
   // get the most recently created underlaying stream
-  latest() {
+  latest () {
     return this.current;
   }
 }
 
-module.exports = function() {
+module.exports = function () {
   // Basic watcher operations grouped in describe to avoid repeating watcher
   // initialization & tear down for each test case.
   describe('watch events', () => {
@@ -182,9 +182,9 @@ module.exports = function() {
 
     before(() => {
       watcher = new Watcher('test', getMock, streamMock, objectFilter);
-      watcher.on('new', obj => newList.push(obj));
-      watcher.on('mod', obj => modList.push(obj));
-      watcher.on('del', obj => delList.push(obj));
+      watcher.on('new', (obj) => newList.push(obj));
+      watcher.on('mod', (obj) => modList.push(obj));
+      watcher.on('del', (obj) => delList.push(obj));
 
       getMock.add(createObject('valid-object', 1, 123));
       getMock.add(createObject('invalid-object', 1, 99));
@@ -204,23 +204,23 @@ module.exports = function() {
       expect(newList[0].name).to.equal('valid-object');
       expect(newList[0].val).to.equal(123);
 
-      let lst = watcher.list();
+      const lst = watcher.list();
       expect(lst).to.have.lengthOf(1);
       expect(lst[0]).to.have.all.keys('name', 'val');
       expect(lst[0].name).to.equal('valid-object');
       expect(lst[0].val).to.equal(123);
 
-      let rawObj = watcher.getRaw('valid-object');
+      const rawObj = watcher.getRaw('valid-object');
       expect(rawObj).to.deep.equal(createObject('valid-object', 1, 123));
     });
 
-    it('should add object to the cache only if it passes through the filter', done => {
+    it('should add object to the cache only if it passes through the filter', (done) => {
       // invalid object should not be added
       streamMock.feed('ADDED', createObject('add-invalid-object', 1, 90));
       // valid object should be added
       streamMock.feed('ADDED', createObject('evented-object', 1, 155));
 
-      function check() {
+      function check () {
         expect(modList).to.have.lengthOf(0);
         expect(delList).to.have.lengthOf(0);
         expect(newList).to.have.lengthOf(2);
@@ -238,7 +238,7 @@ module.exports = function() {
       }
     });
 
-    it('should modify object in the cache if it passes through the filter', done => {
+    it('should modify object in the cache if it passes through the filter', (done) => {
       // new object should be added and new event emitted (not the mod event)
       streamMock.feed('MODIFIED', createObject('new-object', 1, 160));
       // object with old generation number should be ignored
@@ -251,7 +251,7 @@ module.exports = function() {
         createObject('evented-object', undefined, 157)
       );
 
-      function check() {
+      function check () {
         expect(delList).to.have.lengthOf(0);
         expect(modList).to.have.lengthOf(2);
         expect(modList[0].name).to.equal('evented-object');
@@ -271,11 +271,11 @@ module.exports = function() {
       }
     });
 
-    it('should remove object from the cache if it exists', done => {
+    it('should remove object from the cache if it exists', (done) => {
       streamMock.feed('DELETED', createObject('unknown-object', 1, 160));
       streamMock.feed('DELETED', createObject('evented-object', 2, 156));
 
-      function check() {
+      function check () {
         expect(newList).to.have.lengthOf(3);
         expect(modList).to.have.lengthOf(2);
         expect(delList).to.have.lengthOf(1);
@@ -325,7 +325,7 @@ module.exports = function() {
     streamMock.end();
   });
 
-  it('should merge old and new objects upon resync', done => {
+  it('should merge old and new objects upon resync', (done) => {
     var getMock = new GetMock();
     var streamMockTracker = new StreamMockTracker();
     var watcher = new Watcher('test', getMock, streamMockTracker, objectFilter);
@@ -337,9 +337,9 @@ module.exports = function() {
     getMock.add(createObject('object-to-be-modified', 1, 155));
     getMock.add(createObject('object-to-be-deleted', 1, 155));
 
-    watcher.on('new', obj => newObjs.push(obj));
-    watcher.on('mod', obj => modObjs.push(obj));
-    watcher.on('del', obj => delObjs.push(obj));
+    watcher.on('new', (obj) => newObjs.push(obj));
+    watcher.on('mod', (obj) => modObjs.push(obj));
+    watcher.on('del', (obj) => delObjs.push(obj));
 
     watcher.start().then(() => {
       expect(newObjs).to.have.lengthOf(3);
@@ -374,14 +374,14 @@ module.exports = function() {
 
   it('should recover when watch fails during the sync', async () => {
     class BrokenStreamMock {
-      constructor() {
+      constructor () {
         this.iter = 0;
         this.current = null;
       }
 
       // We will fail (end) the stream 3x and 4th attempt will succeed
-      getStream() {
-        let s = new StreamMock();
+      getObjectStream () {
+        const s = new StreamMock();
         this.current = s;
         if (this.iter < 3) {
           s.end();
@@ -391,7 +391,7 @@ module.exports = function() {
       }
 
       // get the most recently created underlaying stream
-      latest() {
+      latest () {
         return this.current;
       }
     }
@@ -413,19 +413,19 @@ module.exports = function() {
 
   it('should recover when GET fails during the sync', async () => {
     class BrokenGetMock {
-      constructor(stream) {
+      constructor (stream) {
         this.stream = stream;
         this.iter = 0;
       }
 
-      get() {
+      get () {
         var self = this;
         return new Promise((resolve, reject) => {
           setTimeout(() => {
             if (self.iter++ < 3) {
               reject({
                 statusCode: 404,
-                body: {},
+                body: {}
               });
               // TODO: defect in current implementation of watcher is that
               // it waits for end of watch connection even when GET fails
@@ -433,7 +433,7 @@ module.exports = function() {
             } else {
               resolve({
                 statusCode: 200,
-                body: { items: [] },
+                body: { items: [] }
               });
             }
           }, 0);
@@ -460,38 +460,4 @@ module.exports = function() {
     watcher.stop();
     streamMockTracker.latest().end();
   }).timeout(10000);
-
-  it('should not crash upon invalid json in the stream', done => {
-    var getMock = new GetMock();
-    var streamMockTracker = new StreamMockTracker();
-    var watcher = new Watcher('test', getMock, streamMockTracker, objectFilter);
-    var newCount = 0;
-    var modCount = 0;
-
-    watcher.on('new', () => newCount++);
-    watcher.on('mod', () => modCount++);
-    getMock.add(createObject('object', 1, 155));
-
-    watcher.start().then(() => {
-      expect(newCount).to.equal(1);
-      expect(modCount).to.equal(0);
-
-      // Following line should be ignored
-      streamMockTracker
-        .latest()
-        .feedRaw('{"type": "ADD", "object":{"non-sense\n');
-      streamMockTracker
-        .latest()
-        .feed('MODIFIED', createObject('object', 2, 156));
-
-      watcher.once('sync', () => {
-        watcher.stop();
-        streamMockTracker.latest().end();
-        expect(newCount).to.equal(1);
-        expect(modCount).to.equal(1);
-        done();
-      });
-      streamMockTracker.latest().end();
-    });
-  });
 };
