@@ -33,14 +33,9 @@ use tonic::transport::{server::Connected, Server};
 
 use git_version::git_version;
 // These libs are needed for gRPC generated code
-use rpc::{self, service::mayastor_server::MayastorServer};
+//use rpc::{self, service::mayastor_server::MayastorServer};
 
-use crate::{
-    identity::Identity,
-    mayastor_svc::MayastorService,
-    mount::probe_filesystems,
-    node::Node,
-};
+use crate::{identity::Identity, mount::probe_filesystems, node::Node};
 
 #[allow(dead_code)]
 #[allow(clippy::type_complexity)]
@@ -53,7 +48,6 @@ pub mod csi {
 
 mod format;
 mod identity;
-mod mayastor_svc;
 mod mount;
 mod node;
 
@@ -196,14 +190,14 @@ async fn main() -> Result<(), String> {
     }
     builder.init();
 
-    let saddr = format!("{}:{}", addr, port).parse().unwrap();
-    info!("Agent starting service on {}", saddr);
+    // let saddr = format!("{}:{}", addr, port).parse().unwrap();
+    // info!("Agent starting service on {}", saddr);
 
-    let tcp = Server::builder()
-        .add_service(MayastorServer::new(MayastorService {
-            socket: ms_socket.into(),
-        }))
-        .serve(saddr);
+    // let tcp = Server::builder()
+    //     .add_service(MayastorServer::new(MayastorService {
+    //         socket: ms_socket.into(),
+    //     }))
+    //     .serve(saddr);
 
     // Remove stale CSI socket from previous instance if there is any
     match fs::remove_file(csi_socket) {
@@ -233,6 +227,6 @@ async fn main() -> Result<(), String> {
             socket: ms_socket.into(),
         }))
         .serve_with_incoming(uds_sock.incoming().map_ok(UnixStream));
-    let _ = futures::future::join(uds, tcp).await;
+    let _ = uds.await; //futures::future::join(uds, tcp).await;
     Ok(())
 }

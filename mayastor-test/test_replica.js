@@ -51,8 +51,8 @@ function createTestDisk (diskFile, done) {
 // Destroy the fake disk used for testing (disregard any error).
 function destroyTestDisk (diskFile, loopDev, done) {
   if (loopDev != null) {
-    common.execAsRoot('losetup', ['-d', loopDev], (err) => {
-      fs.unlink(diskFile, (err) => done());
+    common.execAsRoot('losetup', ['-d', loopDev], (err) => { // eslint-disable-line handle-callback-err
+      fs.unlink(diskFile, (err) => done()); // eslint-disable-line handle-callback-err
     });
   } else {
     done();
@@ -60,7 +60,6 @@ function destroyTestDisk (diskFile, loopDev, done) {
 }
 
 function createGrpcClient (service) {
-  console.log('Starting client at ', endpoint);
   return createClient(
     {
       protoPath: path.join(
@@ -95,7 +94,7 @@ describe('replica', function () {
     if (client == null) {
       return done();
     }
-    client.destroyPool({ name: POOL }, (err) => done());
+    client.destroyPool({ name: POOL }, (err) => done()); // eslint-disable-line handle-callback-err
   }
 
   // start mayastor if needed
@@ -221,7 +220,7 @@ describe('replica', function () {
     client.listPools({}, (err, res) => {
       if (err) return done(err);
 
-      res = res.pools.filter((ent) => ent.name == POOL);
+      res = res.pools.filter((ent) => ent.name === POOL);
       assert.lengthOf(res, 1);
       res = res[0];
 
@@ -264,7 +263,7 @@ describe('replica', function () {
     client.listReplicas({}, (err, res) => {
       if (err) return done(err);
       res = res.replicas.filter((ent) => {
-        return ent.uuid == UUID;
+        return ent.uuid === UUID;
       });
       assert.lengthOf(res, 1);
       res = res[0];
@@ -332,7 +331,7 @@ describe('replica', function () {
     client.listReplicas({}, (err, res) => {
       if (err) return done(err);
       res = res.replicas.filter((ent) => {
-        return ent.uuid == UUID;
+        return ent.uuid === UUID;
       });
       assert.lengthOf(res, 1);
       res = res[0];
@@ -359,7 +358,7 @@ describe('replica', function () {
         client.listReplicas({}, (err, res) => {
           if (err) return done(err);
           res = res.replicas.filter((ent) => {
-            return ent.uuid == UUID;
+            return ent.uuid === UUID;
           });
           assert.lengthOf(res, 1);
           res = res[0];
@@ -399,7 +398,7 @@ describe('replica', function () {
         client.listReplicas({}, (err, res) => {
           if (err) return done(err);
           res = res.replicas.filter((ent) => {
-            return ent.uuid == UUID;
+            return ent.uuid === UUID;
           });
           assert.lengthOf(res, 1);
           res = res[0];
@@ -424,7 +423,7 @@ describe('replica', function () {
         client.listReplicas({}, (err, res) => {
           if (err) return done(err);
           res = res.replicas.filter((ent) => {
-            return ent.uuid == UUID;
+            return ent.uuid === UUID;
           });
           assert.lengthOf(res, 1);
           res = res[0];
@@ -441,7 +440,7 @@ describe('replica', function () {
       if (err) return done(err);
 
       res = res.replicas.filter((ent) => {
-        return ent.uuid == UUID;
+        return ent.uuid === UUID;
       });
       assert.lengthOf(res, 1);
       res = res[0];
@@ -476,7 +475,7 @@ describe('replica', function () {
       if (err) return done(err);
 
       res = res.replicas.filter((ent) => {
-        return ent.uuid == UUID;
+        return ent.uuid === UUID;
       });
       assert.lengthOf(res, 0);
       done();
@@ -525,7 +524,7 @@ describe('replica', function () {
     client.listPools({}, (err, res) => {
       if (err) return done(err);
 
-      res = res.pools.filter((ent) => ent.name == POOL);
+      res = res.pools.filter((ent) => ent.name === POOL);
       assert.lengthOf(res, 0);
       done();
     });
@@ -565,7 +564,7 @@ describe('replica', function () {
       client.listPools({}, (err, res) => {
         if (err) return done(err);
 
-        res = res.pools.filter((ent) => ent.name == POOL);
+        res = res.pools.filter((ent) => ent.name === POOL);
         assert.lengthOf(res, 1);
         res = res[0];
 
@@ -596,7 +595,7 @@ describe('replica', function () {
 
     // run unlink as root because the file was created by root
     function rmBlockFile (done) {
-      common.execAsRoot('rm', ['-f', blockFile], (err) => {
+      common.execAsRoot('rm', ['-f', blockFile], (err) => { // eslint-disable-line handle-callback-err
         // ignore unlink error
         done();
       });
@@ -648,7 +647,7 @@ describe('replica', function () {
       client.listReplicas({}, (err, res) => {
         if (err) return done(err);
         res = res.replicas.filter((ent) => {
-          return ent.uuid == UUID;
+          return ent.uuid === UUID;
         });
         assert.lengthOf(res, 1);
         res = res[0];
@@ -690,7 +689,7 @@ describe('replica', function () {
               data = data.toString();
               assert.lengthOf(data, 4096);
               for (let i = 0; i < data.length; i++) {
-                if (data[i] != 'm') {
+                if (data[i] !== 'm') {
                   next(new Error(`Invalid char '${data[i]}' at offset ${i}`));
                   return;
                 }
@@ -746,7 +745,7 @@ describe('replica', function () {
               if (err) return done(err);
               assert.lengthOf(data, 4096);
               for (let i = 0; i < data.length; i++) {
-                if (data[i] != 0) {
+                if (data[i] !== 0) {
                   next(new Error(`Invalid char '${data[i]}' at offset ${i}`));
                   return;
                 }
@@ -792,8 +791,8 @@ describe('replica', function () {
             }, next);
           },
           (next) =>
-            client.listPools({}, (err, res) => {
-              res = res.pools.filter((ent) => ent.name == POOL);
+            client.listPools({}, (err, res) => { // eslint-disable-line handle-callback-err
+              res = res.pools.filter((ent) => ent.name === POOL);
               if (res.length > 0) {
                 next(new Error("Found pool which hasn't been imported yet"));
               } else {
@@ -813,7 +812,7 @@ describe('replica', function () {
           (next) =>
             client.listPools({}, (err, res) => {
               if (err) return next(err);
-              res = res.pools.filter((ent) => ent.name == POOL);
+              res = res.pools.filter((ent) => ent.name === POOL);
               assert.lengthOf(res, 1);
               next();
             })
