@@ -17,7 +17,6 @@ const assert = require('chai').assert;
 const async = require('async');
 const fs = require('fs');
 const path = require('path');
-const util = require('util');
 const { execSync } = require('child_process');
 const protoLoader = require('@grpc/proto-loader');
 // we can't use grpc-kit because we need to connect to UDS and that's currently
@@ -27,10 +26,10 @@ const common = require('./test_common');
 const enums = require('./grpc_enums');
 // Without requiring wtf module the ts hangs at the end. It seems that it is
 // waiting for sudo'd mayastor progress which has already exited!?
-const wtfnode = require('wtfnode');
+require('wtfnode');
 
 var csiSock = common.CSI_ENDPOINT;
-var endpoint = common.grpc_endpoint;
+var endpoint = common.grpcEndpoint;
 
 // One big malloc bdev which we put lvol store on.
 const CONFIG = `
@@ -119,7 +118,6 @@ describe('csi', function () {
   // to depend on correct function of mayastor iface in order to test CSI.
   before((done) => {
     const identityClient = createCsiClient('Identity');
-    const i = 0;
 
     common.startMayastor(CONFIG);
     common.startMayastorGrpc();
@@ -229,7 +227,7 @@ describe('csi', function () {
               const uuid = BASE_UUID + n;
               common.dumbCommand('unpublish_nexus', { uuid: uuid }, next);
             },
-            function (err, res) {
+            function (err, res) { // eslint-disable-line handle-callback-err
               next();
             }
           );
@@ -528,9 +526,6 @@ describe('csi', function () {
   describe('stage and unstage ext4 volume', function () {
     var client;
     var mountTarget = '/tmp/target1';
-
-    // get default args for stage op with xfs fs
-    function getDefaultArgs () {}
 
     before((done) => {
       client = createCsiClient('Node');
